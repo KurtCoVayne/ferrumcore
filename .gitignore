@@ -1,0 +1,16 @@
+# Working/planning material — NOT part of the committed source tree.
+# Contains the behavioral-equivalence implementation blueprint and proposed
+# implementation skeleton produced before any production code exists.
+plan/
+
+# Standard build/IDE artifacts (kept here so the structure is ready when code lands)
+target/
+build/
+dist/
+*.class
+.gradle/
+node_modules/
+.idea/
+.vscode/
+*.iml
+.DS_Store
