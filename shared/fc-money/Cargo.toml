@@ -1,0 +1,14 @@
+[package]
+name = "fc-money"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "FerrumCore Money/Decimal value type — bigdecimal-wrapped, Java-BigDecimal-equivalent (ADR-0005)."
+
+[lints]
+workspace = true
+
+# Dependency added when the Money impl lands (ADR-0005 spike validated bigdecimal 0.4 — plan/spikes/decimal/FINDINGS.md):
+# bigdecimal = "0.4"
+[dependencies]

@@ -1,0 +1,8 @@
+# Determinism + money-safety lints (ADR-0009/0005, Part-5).
+disallowed-methods = [
+  { path = "std::time::SystemTime::now", reason = "use an injected Clock (determinism, ADR-0009)" },
+]
+disallowed-types = [
+  { path = "f32", reason = "no binary floats in money paths (ADR-0005)" },
+  { path = "f64", reason = "no binary floats in money paths (ADR-0005)" },
+]

@@ -1,0 +1,6 @@
+# Ownership boundaries (ADR-0023). Placeholders — assign real teams at staffing (SO-7).
+/shared/fc-money/        @ferrumcore/financial-core @ferrumcore/principal-architect
+/shared/                 @ferrumcore/financial-core
+/.github/                @ferrumcore/platform
+/deny.toml               @ferrumcore/security
+/Cargo.toml              @ferrumcore/principal-architect

@@ -1,0 +1,27 @@
+# FerrumCore CI — Part-6 quality gates (every PR must pass all). Mirrors governance/part-5 + part-6.
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0          # pinned; edition 2024 (verify latest patch at adoption)
+        with:
+          components: rustfmt, clippy
+      - name: QG-2 format
+        run: cargo fmt --all --check
+      - name: QG-3 lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: QG-1 build
+        run: cargo build --workspace --locked
+      - name: QG-5 test
+        run: cargo test --workspace --locked
+      - name: QG-6/7 supply-chain + licenses
+        run: |
+          cargo install cargo-deny --locked || true
+          cargo deny check
+      # Reference-system parity jobs (JDK 21 / Postgres) are added with the dual-run harness (plan/harness).

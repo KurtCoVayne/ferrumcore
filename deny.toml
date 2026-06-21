@@ -1,0 +1,17 @@
+# cargo-deny policy (ADR-0015 / Part-6 QG-6/7). Supply-chain + license gate.
+[advisories]
+yanked = "deny"
+
+[licenses]
+allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0"]
+confidence-threshold = 0.95
+
+[bans]
+multiple-versions = "warn"          # tighten to "deny" once the dep graph is stable
+wildcards = "deny"
+deny = [{ name = "openssl" }, { name = "openssl-sys" }]   # rustls only (ADR-0014)
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

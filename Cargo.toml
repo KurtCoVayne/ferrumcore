@@ -1,0 +1,28 @@
+# FerrumCore workspace — pre-Gate-1 scaffold (ADR-0002/0003). Real, buildable, gate-enforced.
+# Only shared/fc-money exists initially (its Money type lands after ADR-0005 spike — DONE; see plan/spikes/decimal).
+# Domain/service crates are added per the repository blueprint (governance/part-4) as Gate-1 opens.
+[workspace]
+resolver = "3"                                  # edition 2024
+members = ["shared/fc-money"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "FerrumCore"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"        # financial safety — no panics-by-unwrap in non-test code
+expect_used = "deny"
+panic = "deny"
+float_arithmetic = "deny"  # no binary floats in money paths (ADR-0005)
+
+[profile.release]
+overflow-checks = true      # arithmetic overflow must panic, not wrap (financial safety)
+panic = "unwind"            # so the tx boundary can roll back
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,5 @@
+# Pinned toolchain (ADR-0001). MSRV = 1.85 (edition 2024 floor). Pinned to the installed stable for reproducibility;
+# verify/raise per the N-1 upgrade policy at adoption.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
