@@ -1,0 +1,12 @@
+[package]
+name = "fc-loan-lifecycle"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Loan lifecycle state machine — faithful port of Fineract's DefaultLoanLifecycleStateMachine (BI-1)."
+
+[lints]
+workspace = true
+
+[dependencies]

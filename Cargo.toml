@@ -3,7 +3,10 @@
 # Domain/service crates are added per the repository blueprint (governance/part-4) as Gate-1 opens.
 [workspace]
 resolver = "3"                                  # edition 2024
-members = ["shared/fc-money"]
+members = [
+    "shared/fc-money",
+    "services/core-ledger/crates/domain/loan-lifecycle",
+]
 
 [workspace.package]
 edition = "2024"
