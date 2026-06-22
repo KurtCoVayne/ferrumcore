@@ -64,6 +64,70 @@ impl LoanStatus {
             _ => return None,
         })
     }
+
+    // --- predicates (faithful to the original LoanStatus.is*() helpers) ---
+    /// `SUBMITTED_AND_PENDING_APPROVAL`.
+    #[must_use]
+    pub fn is_submitted_and_pending_approval(self) -> bool {
+        self == LoanStatus::SubmittedAndPendingApproval
+    }
+    /// `APPROVED`.
+    #[must_use]
+    pub fn is_approved(self) -> bool {
+        self == LoanStatus::Approved
+    }
+    /// `ACTIVE`.
+    #[must_use]
+    pub fn is_active(self) -> bool {
+        self == LoanStatus::Active
+    }
+    /// `OVERPAID`.
+    #[must_use]
+    pub fn is_overpaid(self) -> bool {
+        self == LoanStatus::Overpaid
+    }
+    /// `CLOSED_OBLIGATIONS_MET`.
+    #[must_use]
+    pub fn is_closed_obligations_met(self) -> bool {
+        self == LoanStatus::ClosedObligationsMet
+    }
+    /// `CLOSED_WRITTEN_OFF`.
+    #[must_use]
+    pub fn is_closed_written_off(self) -> bool {
+        self == LoanStatus::ClosedWrittenOff
+    }
+    /// `CLOSED_RESCHEDULE_OUTSTANDING_AMOUNT`.
+    #[must_use]
+    pub fn is_closed_with_outstanding_marked_for_reschedule(self) -> bool {
+        self == LoanStatus::ClosedRescheduleOutstandingAmount
+    }
+    /// Any closed state (`isClosed()` — obligations-met, written-off, or reschedule-outstanding).
+    #[must_use]
+    pub fn is_closed(self) -> bool {
+        self.is_closed_obligations_met()
+            || self.is_closed_written_off()
+            || self.is_closed_with_outstanding_marked_for_reschedule()
+    }
+    /// `isActiveOrAwaitingApprovalOrDisbursal()`.
+    #[must_use]
+    pub fn is_active_or_awaiting_approval_or_disbursal(self) -> bool {
+        self.is_approved() || self.is_submitted_and_pending_approval() || self.is_active()
+    }
+    /// `TRANSFER_IN_PROGRESS`.
+    #[must_use]
+    pub fn is_transfer_in_progress(self) -> bool {
+        self == LoanStatus::TransferInProgress
+    }
+    /// `TRANSFER_ON_HOLD`.
+    #[must_use]
+    pub fn is_transfer_on_hold(self) -> bool {
+        self == LoanStatus::TransferOnHold
+    }
+    /// In transfer (`isUnderTransfer()` — in-progress or on-hold).
+    #[must_use]
+    pub fn is_under_transfer(self) -> bool {
+        self.is_transfer_in_progress() || self.is_transfer_on_hold()
+    }
 }
 
 /// Loan lifecycle event (subset of the original `LoanEvent` that the state machine acts on; others are no-ops).

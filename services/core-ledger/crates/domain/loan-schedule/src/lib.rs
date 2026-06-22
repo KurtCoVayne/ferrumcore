@@ -4,12 +4,17 @@
 //! `ProgressiveEMICalculator` (`fineract-progressive-loan/.../calc/ProgressiveEMICalculator.java`), validated against
 //! `ProgressiveEMICalculatorTest` (GREEN). Pure: no IO, no framework.
 //!
-//! Reproduces the original exactly, including its use of **Java `MathContext` significant-figure arithmetic** (see
-//! [`MathCtx`]) for the rate-factor / EMI computation, then currency-scale rounding for the amortization. Verified by
-//! the conformance golden in `tests/` (captured by driving the real calculator).
+//! Reproduces the original exactly, including (a) **Java `MathContext` significant-figure arithmetic** ([`MathCtx`])
+//! for the rate-factor / EMI computation, (b) currency-scale amortization, and (c) the **equal-installment EMI
+//! adjustment** ([`adjust_emi`]) that nudges the EMI by a cent when it reduces the last-vs-penultimate disparity.
 //!
-//! Scope: fresh simple disbursement, declining balance, monthly periods (the two captured golden scenarios). Tranches,
-//! re-age, interest pause, rate changes, etc. are deliberately out of scope for this first kernel element.
+//! **Complete & verified for its scope:** fresh simple disbursement, declining balance, monthly periods — proven by
+//! `tests/conformance_schedule.rs` against **75 golden rows / 7 scenarios** captured from the real calculator
+//! (interest-free, 3–24 month terms, varied principals, `ACTUAL` and `DAYS_30`/`360`/`365` day counts).
+//!
+//! **Out of scope (tracked backlog, each its own golden-driven element):** multi-disbursement/tranches, interest
+//! recalculation on transactions, re-age / re-amortize, interest pause, mid-term rate changes, capitalized income,
+//! flat interest, non-monthly (daily/weekly) frequencies.
 #![forbid(unsafe_code)]
 
 use bigdecimal::BigDecimal;
@@ -39,16 +44,13 @@ impl MathCtx {
         Self { precision, mode }
     }
 
-    /// Round `x` to `precision` significant figures with `mode` (Java `BigDecimal.round(mc)`).
+    /// Round `x` to `precision` significant figures with `mode` (Java `BigDecimal.round(mc)`) — single rounding.
     #[must_use]
     pub fn round_sig(&self, x: &BigDecimal) -> BigDecimal {
         if is_zero(x) {
             return BigDecimal::from(0);
         }
-        let (unscaled, scale) = x.as_bigint_and_exponent();
-        let n_digits = unscaled.to_string().trim_start_matches('-').len() as i64;
-        let leading_exp = (n_digits - 1) - scale; // floor(log10(|x|))
-        let target_scale = i64::from(self.precision) - 1 - leading_exp;
+        let target_scale = i64::from(self.precision) - 1 - leading_exp(x);
         decimal::set_scale(x, target_scale, self.mode)
     }
 
@@ -62,13 +64,26 @@ impl MathCtx {
     pub fn add(&self, a: &BigDecimal, b: &BigDecimal) -> BigDecimal {
         self.round_sig(&(a.clone() + b.clone()))
     }
-    /// `a / b` rounded to `precision` sig figs (Java `a.divide(b, mc)`).
+    /// `a / b` correctly rounded to `precision` sig figs (Java `a.divide(b, mc)`).
+    ///
+    /// Single rounding of the exact quotient: a coarse division finds the quotient's magnitude, then it is divided
+    /// once to the scale that yields `precision` significant figures (avoids double-rounding).
     #[must_use]
     pub fn div(&self, a: &BigDecimal, b: &BigDecimal) -> BigDecimal {
-        // divide to generous scale, then round to significant figures (guard digits avoid double-rounding here)
-        let guard = i64::from(self.precision) + 30;
-        self.round_sig(&decimal::div(a, b, guard, self.mode))
+        let coarse = decimal::div(a, b, i64::from(self.precision) + 40, self.mode);
+        if is_zero(&coarse) {
+            return BigDecimal::from(0);
+        }
+        let target_scale = i64::from(self.precision) - 1 - leading_exp(&coarse);
+        decimal::div(a, b, target_scale, self.mode)
     }
+}
+
+/// `floor(log10(|x|))` — position of the leading significant digit.
+fn leading_exp(x: &BigDecimal) -> i64 {
+    let (unscaled, scale) = x.as_bigint_and_exponent();
+    let n_digits = unscaled.to_string().trim_start_matches('-').len() as i64;
+    (n_digits - 1) - scale
 }
 
 /// Day-count configuration for a period's rate factor.
@@ -167,40 +182,39 @@ pub fn generate(params: &ScheduleParams, periods: &[PeriodBoundary]) -> Vec<Peri
         .fold(one.clone(), |f, v| mc.add(&mc.mul(&f, v), &one));
     let disbursed = decimal::set_scale(&params.disbursed, params.currency_scale, mc.mode);
     let emi_unrounded = mc.div(&mc.mul(&rate_factor_n, &disbursed), &fn_result);
-    let emi = decimal::set_scale(&emi_unrounded, params.currency_scale, mc.mode);
+    let base_emi = decimal::set_scale(&emi_unrounded, params.currency_scale, mc.mode);
 
-    // amortization
-    let mut out = Vec::with_capacity(periods.len());
-    let mut outstanding = disbursed;
-    let n = periods.len();
+    let scale = params.currency_scale;
+    let mut schedule = distribute(&base_emi, &rfs, &disbursed, scale, mc.mode);
+    adjust_emi(&mut schedule, &rfs, &disbursed, scale, &mc);
+    schedule
+}
+
+/// Spread `base_emi` across the periods (declining balance); the last period (or any that would overpay) closes the
+/// remaining balance via `emi = principal + interest`.
+fn distribute(
+    base_emi: &BigDecimal,
+    rfs: &[BigDecimal],
+    disbursed: &BigDecimal,
+    scale: i64,
+    mode: RoundingMode,
+) -> Vec<PeriodResult> {
+    let n = rfs.len();
+    let mut out = Vec::with_capacity(n);
+    let mut outstanding = disbursed.clone();
     for (i, rf) in rfs.iter().enumerate() {
-        let interest = decimal::set_scale(
-            &(outstanding.clone() * rf.clone()),
-            params.currency_scale,
-            mc.mode,
-        );
-        let principal_full = decimal::set_scale(
-            &(emi.clone() - interest.clone()),
-            params.currency_scale,
-            mc.mode,
-        );
+        let interest = decimal::set_scale(&(outstanding.clone() * rf.clone()), scale, mode);
+        let principal_full =
+            decimal::set_scale(&(base_emi.clone() - interest.clone()), scale, mode);
         let last = i == n - 1;
         let (principal, emi_i) = if last || decimal::compare(&principal_full, &outstanding) > 0 {
             let p = outstanding.clone();
-            let e = decimal::set_scale(
-                &(p.clone() + interest.clone()),
-                params.currency_scale,
-                mc.mode,
-            );
+            let e = decimal::set_scale(&(p.clone() + interest.clone()), scale, mode);
             (p, e)
         } else {
-            (principal_full, emi.clone())
+            (principal_full, base_emi.clone())
         };
-        outstanding = decimal::set_scale(
-            &(outstanding.clone() - principal.clone()),
-            params.currency_scale,
-            mc.mode,
-        );
+        outstanding = decimal::set_scale(&(outstanding.clone() - principal.clone()), scale, mode);
         out.push(PeriodResult {
             emi: emi_i,
             principal,
@@ -209,4 +223,64 @@ pub fn generate(params: &ScheduleParams, periods: &[PeriodBoundary]) -> Vec<Peri
         });
     }
     out
+}
+
+fn abs_bd(x: &BigDecimal) -> BigDecimal {
+    if decimal::compare(x, &BigDecimal::from(0)) < 0 {
+        -x.clone()
+    } else {
+        x.clone()
+    }
+}
+
+/// Equal-installment EMI adjustment (original `checkAndAdjustEmiIfNeededOnRelatedRepaymentPeriods` + `EmiAdjustment`):
+/// nudge the equal EMI by a cent (up to 3 times) when doing so reduces the last-vs-penultimate EMI disparity.
+fn adjust_emi(
+    schedule: &mut Vec<PeriodResult>,
+    rfs: &[BigDecimal],
+    disbursed: &BigDecimal,
+    scale: i64,
+    mc: &MathCtx,
+) {
+    let n = schedule.len();
+    if n < 2 {
+        return;
+    }
+    let hundred = BigDecimal::from(100);
+    for _ in 0..3 {
+        let penult = schedule[n - 2].emi.clone(); // originalEmi
+        let emi_diff = decimal::set_scale(
+            &(schedule[n - 1].emi.clone() - penult.clone()),
+            scale,
+            mc.mode,
+        );
+        if decimal::compare(&emi_diff, &BigDecimal::from(0)) == 0 {
+            return;
+        }
+        // shouldBeAdjusted: floor(n/2) > 0 && |emiDiff|*100 > floor(n/2)
+        let lower_half = (n / 2) as i64;
+        if lower_half == 0 {
+            return;
+        }
+        let lhs = abs_bd(&emi_diff) * hundred.clone();
+        if decimal::compare(&lhs, &BigDecimal::from(lower_half)) <= 0 {
+            return;
+        }
+        // adjustment = round(emiDiff / max(1, n - uncountable); uncountable=0 for a fresh schedule)
+        let adjustment = decimal::set_scale(
+            &mc.div(&emi_diff, &BigDecimal::from(n as i64)),
+            scale,
+            mc.mode,
+        );
+        let adjusted_emi = decimal::set_scale(&(penult.clone() + adjustment), scale, mc.mode);
+        if decimal::compare(&adjusted_emi, &penult) == 0 {
+            return;
+        }
+        let candidate = distribute(&adjusted_emi, rfs, disbursed, scale, mc.mode);
+        let new_diff = abs_bd(&(candidate[n - 1].emi.clone() - candidate[n - 2].emi.clone()));
+        if decimal::compare(&new_diff, &abs_bd(&emi_diff)) >= 0 {
+            return; // not an improvement → keep current schedule
+        }
+        *schedule = candidate;
+    }
 }
