@@ -9,6 +9,5 @@ description = "FerrumCore Money/Decimal value type — bigdecimal-wrapped, Java-
 [lints]
 workspace = true
 
-# Dependency added when the Money impl lands (ADR-0005 spike validated bigdecimal 0.4 — plan/spikes/decimal/FINDINGS.md):
-# bigdecimal = "0.4"
 [dependencies]
+bigdecimal = { workspace = true }

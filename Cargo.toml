@@ -11,6 +11,10 @@ rust-version = "1.85"
 license = "Apache-2.0"
 repository = "FerrumCore"
 
+# Single source of dependency versions (ADR-0002). bigdecimal validated by the B1 spike (plan/spikes/decimal).
+[workspace.dependencies]
+bigdecimal = "0.4"
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 unused_must_use = "deny"
