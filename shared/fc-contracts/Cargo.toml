@@ -1,0 +1,13 @@
+[package]
+name = "fc-contracts"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Shared cross-service contracts (ADR-0022/0025): typed API error model + canonical Avro event schemas (byte-compatible)."
+
+[lints]
+workspace = true
+
+[dependencies]
+apache-avro = { workspace = true }

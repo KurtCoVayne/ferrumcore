@@ -8,6 +8,7 @@ members = [
     "shared/fc-domain-shared",
     "shared/fc-domain-charge-tax-rates",
     "shared/fc-proto",
+    "shared/fc-contracts",
     "services/core-ledger/crates/domain/loan-lifecycle",
     "services/core-ledger/crates/domain/loan-schedule",
 ]
@@ -25,10 +26,12 @@ time = { version = "0.3", default-features = false, features = ["std"] }
 prost = "0.14"
 prost-build = "0.14"
 protox = "0.9"
+apache-avro = "0.21"
 fc-money = { path = "shared/fc-money" }
 fc-domain-shared = { path = "shared/fc-domain-shared" }
 fc-domain-charge-tax-rates = { path = "shared/fc-domain-charge-tax-rates" }
 fc-proto = { path = "shared/fc-proto" }
+fc-contracts = { path = "shared/fc-contracts" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
