@@ -1,0 +1,17 @@
+[package]
+name = "fc-proto"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Inter-service gRPC wire contracts (ADR-0025): prost types generated from canonical .proto IDL via pure-Rust protox."
+
+[lints]
+workspace = true
+
+[dependencies]
+prost = { workspace = true }
+
+[build-dependencies]
+prost-build = { workspace = true }
+protox = { workspace = true }

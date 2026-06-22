@@ -1,0 +1,95 @@
+// FerrumCore core-ledger loan contracts (ADR-0024/0025). Enum codes are the original `LoanStatus` /
+// `InterestMethod` / `InterestCalculationPeriodMethod` / `PeriodFrequencyType` values — the wire/DB contract.
+syntax = "proto3";
+
+package ferrumcore.core_ledger.v1;
+
+import "ferrumcore/core_ledger/v1/money.proto";
+
+// Loan status — values identical to the original `LoanStatus` enum (sparse on purpose).
+enum LoanStatus {
+  LOAN_STATUS_INVALID = 0;
+  LOAN_STATUS_SUBMITTED_AND_PENDING_APPROVAL = 100;
+  LOAN_STATUS_APPROVED = 200;
+  LOAN_STATUS_ACTIVE = 300;
+  LOAN_STATUS_TRANSFER_IN_PROGRESS = 303;
+  LOAN_STATUS_TRANSFER_ON_HOLD = 304;
+  LOAN_STATUS_WITHDRAWN_BY_CLIENT = 400;
+  LOAN_STATUS_REJECTED = 500;
+  LOAN_STATUS_CLOSED_OBLIGATIONS_MET = 600;
+  LOAN_STATUS_CLOSED_WRITTEN_OFF = 601;
+  LOAN_STATUS_CLOSED_RESCHEDULE_OUTSTANDING_AMOUNT = 602;
+  LOAN_STATUS_OVERPAID = 700;
+}
+
+// Interest method — original `InterestMethod` (0 = declining balance, 1 = flat).
+enum InterestMethod {
+  INTEREST_METHOD_DECLINING_BALANCE = 0;
+  INTEREST_METHOD_FLAT = 1;
+  INTEREST_METHOD_INVALID = 2;
+}
+
+// Interest calculation period — original `InterestCalculationPeriodMethod`.
+enum InterestCalculationPeriodMethod {
+  INTEREST_CALCULATION_PERIOD_METHOD_DAILY = 0;
+  INTEREST_CALCULATION_PERIOD_METHOD_SAME_AS_REPAYMENT = 1;
+  INTEREST_CALCULATION_PERIOD_METHOD_INVALID = 2;
+}
+
+// Repayment frequency — original `PeriodFrequencyType`.
+enum PeriodFrequencyType {
+  PERIOD_FREQUENCY_TYPE_DAYS = 0;
+  PERIOD_FREQUENCY_TYPE_WEEKS = 1;
+  PERIOD_FREQUENCY_TYPE_MONTHS = 2;
+  PERIOD_FREQUENCY_TYPE_YEARS = 3;
+  PERIOD_FREQUENCY_TYPE_WHOLE_TERM = 4;
+  PERIOD_FREQUENCY_TYPE_INVALID = 5;
+}
+
+// A date as a proleptic-Gregorian ordinal day count from the Unix epoch (1970-01-01 = 0). Avoids timezone ambiguity.
+message LocalDate {
+  sint64 epoch_day = 1;
+}
+
+// One generated repayment-schedule installment.
+message LoanScheduleInstallment {
+  uint32 period = 1;            // 1-based installment number
+  LocalDate from_date = 2;
+  LocalDate due_date = 3;
+  Money emi = 4;
+  Money principal = 5;
+  Money interest = 6;
+  Money outstanding_principal = 7;  // principal balance after this installment
+}
+
+// A fully generated repayment schedule.
+message LoanSchedule {
+  repeated LoanScheduleInstallment installments = 1;
+}
+
+// Request to generate a repayment schedule (mirrors fc-loan-schedule `ScheduleParams`).
+message GenerateScheduleRequest {
+  Money disbursed = 1;
+  string annual_nominal_interest_rate = 2;  // exact decimal string (percent)
+  uint32 number_of_repayments = 3;
+  uint32 repay_every = 4;
+  PeriodFrequencyType repayment_frequency = 5;
+  InterestMethod interest_method = 6;
+  InterestCalculationPeriodMethod interest_calculation_period = 7;
+  uint32 grace_on_principal_periods = 8;
+  uint32 days_in_year = 9;
+  bool days_in_month_30 = 10;
+  LocalDate disbursement_date = 11;
+}
+
+message GenerateScheduleResponse {
+  LoanSchedule schedule = 1;
+}
+
+// Loan schedule gRPC service (ADR-0025). This IDL is the canonical contract; the tonic server/client *stubs* are
+// generated in the transport adapter (where tokio/async are permitted) — NOT in this shared crate, which must stay
+// IO/runtime-free per the Part-4 dependency invariant. fc-proto generates only the message/enum types above.
+service LoanScheduleService {
+  // Generate a repayment schedule for the given loan terms.
+  rpc GenerateSchedule(GenerateScheduleRequest) returns (GenerateScheduleResponse);
+}

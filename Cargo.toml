@@ -7,6 +7,7 @@ members = [
     "shared/fc-money",
     "shared/fc-domain-shared",
     "shared/fc-domain-charge-tax-rates",
+    "shared/fc-proto",
     "services/core-ledger/crates/domain/loan-lifecycle",
     "services/core-ledger/crates/domain/loan-schedule",
 ]
@@ -21,8 +22,13 @@ repository = "FerrumCore"
 [workspace.dependencies]
 bigdecimal = "0.4"
 time = { version = "0.3", default-features = false, features = ["std"] }
+prost = "0.14"
+prost-build = "0.14"
+protox = "0.9"
 fc-money = { path = "shared/fc-money" }
 fc-domain-shared = { path = "shared/fc-domain-shared" }
+fc-domain-charge-tax-rates = { path = "shared/fc-domain-charge-tax-rates" }
+fc-proto = { path = "shared/fc-proto" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

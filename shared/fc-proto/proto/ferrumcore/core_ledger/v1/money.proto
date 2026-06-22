@@ -1,0 +1,16 @@
+// FerrumCore inter-service wire contract (ADR-0025: synchronous gRPC, tonic/prost).
+// Money is transported as an EXACT decimal STRING (fc-money `to_plain_string`: no scientific notation, trailing zeros
+// to scale, `-0`→`0`). Binary floating point is never used on the wire — financial values stay bit-exact (ADR-0005).
+syntax = "proto3";
+
+package ferrumcore.core_ledger.v1;
+
+// An exact monetary amount.
+message Money {
+  // Canonical decimal string — the Java `BigDecimal.toPlainString` form produced by fc-money.
+  string amount = 1;
+  // ISO-4217 currency code (e.g. "USD").
+  string currency_code = 2;
+  // Number of fraction digits carried by `amount` (the currency's scale).
+  uint32 scale = 3;
+}
