@@ -1,0 +1,12 @@
+[package]
+name = "fc-domain-shared"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Cross-cutting domain value objects + enums (day-count, frequency, interest, savings), codes faithful to the original."
+
+[lints]
+workspace = true
+
+[dependencies]

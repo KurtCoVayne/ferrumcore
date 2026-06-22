@@ -1,0 +1,42 @@
+# Domain enum codes — extracted from the original enums (portfolio/common/domain, loanproduct/domain, savings).
+# These integer codes + Java constant names are the wire/DB contract; fc-domain-shared must reproduce them exactly.
+# Columns: enum	javaName	code
+DaysInYearType	INVALID	0
+DaysInYearType	ACTUAL	1
+DaysInYearType	DAYS_360	360
+DaysInYearType	DAYS_364	364
+DaysInYearType	DAYS_365	365
+DaysInMonthType	INVALID	0
+DaysInMonthType	ACTUAL	1
+DaysInMonthType	DAYS_30	30
+PeriodFrequencyType	DAYS	0
+PeriodFrequencyType	WEEKS	1
+PeriodFrequencyType	MONTHS	2
+PeriodFrequencyType	YEARS	3
+PeriodFrequencyType	WHOLE_TERM	4
+PeriodFrequencyType	INVALID	5
+InterestMethod	DECLINING_BALANCE	0
+InterestMethod	FLAT	1
+InterestMethod	INVALID	2
+InterestCalculationPeriodMethod	DAILY	0
+InterestCalculationPeriodMethod	SAME_AS_REPAYMENT_PERIOD	1
+InterestCalculationPeriodMethod	INVALID	2
+SavingsInterestCalculationType	INVALID	0
+SavingsInterestCalculationType	DAILY_BALANCE	1
+SavingsInterestCalculationType	AVERAGE_DAILY_BALANCE	2
+SavingsCompoundingInterestPeriodType	INVALID	0
+SavingsCompoundingInterestPeriodType	DAILY	1
+SavingsCompoundingInterestPeriodType	MONTHLY	4
+SavingsCompoundingInterestPeriodType	QUATERLY	5
+SavingsCompoundingInterestPeriodType	BI_ANNUAL	6
+SavingsCompoundingInterestPeriodType	ANNUAL	7
+SavingsPostingInterestPeriodType	INVALID	0
+SavingsPostingInterestPeriodType	DAILY	1
+SavingsPostingInterestPeriodType	MONTHLY	4
+SavingsPostingInterestPeriodType	QUATERLY	5
+SavingsPostingInterestPeriodType	BIANNUAL	6
+SavingsPostingInterestPeriodType	ANNUAL	7
+SavingsPostingInterestPeriodType	ANNIVERSARY_MONTHLY	8
+SavingsPostingInterestPeriodType	ANNIVERSARY_QUARTERLY	9
+SavingsPostingInterestPeriodType	ANNIVERSARY_BIANNUAL	10
+SavingsPostingInterestPeriodType	ANNIVERSARY_ANNUAL	11
