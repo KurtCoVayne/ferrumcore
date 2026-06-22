@@ -1,0 +1,34 @@
+# enum<TAB>java_name<TAB>code — transcribed from the original Apache Fineract enums (DB/wire contract).
+# ChargeTimeType (portfolio/charge/domain/ChargeTimeType.java) — no INVALID, code 4 unused
+ChargeTimeType	DISBURSEMENT	1
+ChargeTimeType	SPECIFIED_DUE_DATE	2
+ChargeTimeType	SAVINGS_ACTIVATION	3
+ChargeTimeType	WITHDRAWAL_FEE	5
+ChargeTimeType	ANNUAL_FEE	6
+ChargeTimeType	MONTHLY_FEE	7
+ChargeTimeType	INSTALLMENT_FEE	8
+ChargeTimeType	OVERDUE_FEES	9
+ChargeTimeType	OVERDRAFT_FEE	10
+ChargeTimeType	WEEKLY_FEE	11
+ChargeTimeType	TRANCHE_DISBURSEMENT	12
+ChargeTimeType	SHARE_ACCOUNT_ACTIVATE	13
+ChargeTimeType	SHARE_PURCHASE	14
+ChargeTimeType	SHARE_REDEEM	15
+ChargeTimeType	SAVING_NO_ACTIVITY_FEE	16
+# ChargeCalculationType (portfolio/charge/domain/ChargeCalculationType.java)
+ChargeCalculationType	INVALID	0
+ChargeCalculationType	FLAT	1
+ChargeCalculationType	PERCENT_OF_AMOUNT	2
+ChargeCalculationType	PERCENT_OF_AMOUNT_AND_INTEREST	3
+ChargeCalculationType	PERCENT_OF_INTEREST	4
+ChargeCalculationType	PERCENT_OF_DISBURSEMENT_AMOUNT	5
+# ChargeAppliesTo (portfolio/charge/domain/ChargeAppliesTo.java)
+ChargeAppliesTo	INVALID	0
+ChargeAppliesTo	LOAN	1
+ChargeAppliesTo	SAVINGS	2
+ChargeAppliesTo	CLIENT	3
+ChargeAppliesTo	SHARES	4
+ChargeAppliesTo	WORKING_CAPITAL_LOAN	5
+# ChargePaymentMode (portfolio/charge/domain/ChargePaymentMode.java)
+ChargePaymentMode	REGULAR	0
+ChargePaymentMode	ACCOUNT_TRANSFER	1

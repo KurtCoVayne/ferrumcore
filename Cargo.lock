@@ -31,6 +31,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fc-domain-charge-tax-rates"
+version = "0.0.0"
+dependencies = [
+ "bigdecimal",
+ "fc-money",
+ "time",
+]
+
+[[package]]
 name = "fc-domain-shared"
 version = "0.0.0"
 

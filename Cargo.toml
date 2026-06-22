@@ -6,6 +6,7 @@ resolver = "3"                                  # edition 2024
 members = [
     "shared/fc-money",
     "shared/fc-domain-shared",
+    "shared/fc-domain-charge-tax-rates",
     "services/core-ledger/crates/domain/loan-lifecycle",
     "services/core-ledger/crates/domain/loan-schedule",
 ]

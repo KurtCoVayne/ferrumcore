@@ -1,0 +1,15 @@
+[package]
+name = "fc-domain-charge-tax-rates"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Charge/tax/rate domain: coded enums (BI-8), tax split (BI-9, faithful double quirk), floating-rate selection (BI-10)."
+
+[lints]
+workspace = true
+
+[dependencies]
+bigdecimal = { workspace = true }
+time = { workspace = true }
+fc-money = { workspace = true }
