@@ -7,6 +7,7 @@ members = [
     "shared/fc-money",
     "shared/fc-domain-shared",
     "services/core-ledger/crates/domain/loan-lifecycle",
+    "services/core-ledger/crates/domain/loan-schedule",
 ]
 
 [workspace.package]
@@ -18,6 +19,9 @@ repository = "FerrumCore"
 # Single source of dependency versions (ADR-0002). bigdecimal validated by the B1 spike (plan/spikes/decimal).
 [workspace.dependencies]
 bigdecimal = "0.4"
+time = { version = "0.3", default-features = false, features = ["std"] }
+fc-money = { path = "shared/fc-money" }
+fc-domain-shared = { path = "shared/fc-domain-shared" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

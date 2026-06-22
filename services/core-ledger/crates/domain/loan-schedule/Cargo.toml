@@ -1,0 +1,19 @@
+[package]
+name = "fc-loan-schedule"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Progressive loan schedule kernel — faithful port of ProgressiveEMICalculator (declining-balance, simple disbursement)."
+
+[lints]
+workspace = true
+
+[dependencies]
+bigdecimal = { workspace = true }
+time = { workspace = true }
+fc-money = { workspace = true }
+
+[dev-dependencies]
+time = { workspace = true }
+fc-money = { workspace = true }
