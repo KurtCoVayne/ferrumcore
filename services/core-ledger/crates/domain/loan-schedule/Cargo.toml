@@ -13,7 +13,9 @@ workspace = true
 bigdecimal = { workspace = true }
 time = { workspace = true }
 fc-money = { workspace = true }
+fc-domain-shared = { workspace = true }
 
 [dev-dependencies]
 time = { workspace = true }
 fc-money = { workspace = true }
+fc-domain-shared = { workspace = true }

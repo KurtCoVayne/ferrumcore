@@ -8,18 +8,24 @@
 //! for the rate-factor / EMI computation, (b) currency-scale amortization, and (c) the **equal-installment EMI
 //! adjustment** ([`adjust_emi`]) that nudges the EMI by a cent when it reduces the last-vs-penultimate disparity.
 //!
-//! **Complete & verified for its scope:** fresh simple disbursement, declining balance, monthly periods — proven by
-//! `tests/conformance_schedule.rs` against **75 golden rows / 7 scenarios** captured from the real calculator
-//! (interest-free, 3–24 month terms, varied principals, `ACTUAL` and `DAYS_30`/`360`/`365` day counts).
+//! **Complete & verified for fresh-disbursement schedule generation** — proven by `tests/conformance_schedule.rs`
+//! against **145 golden rows / 16 scenarios** captured from the real calculator, spanning the full config space:
+//! - interest method: **declining balance** and **flat**;
+//! - frequency: **monthly / weekly / daily** with arbitrary **repay-every**;
+//! - interest-calc method: **daily** and **same-as-repayment-period**;
+//! - day counts: `ACTUAL` and `DAYS_30` over `360`/`364`/`365`;
+//! - **leading principal grace** (interest-only) periods;
+//! - the **equal-installment EMI adjustment**; plus interest-free, varied rates/terms/principals.
 //!
-//! **Out of scope (tracked backlog, each its own golden-driven element):** multi-disbursement/tranches, interest
-//! recalculation on transactions, re-age / re-amortize, interest pause, mid-term rate changes, capitalized income,
-//! flat interest, non-monthly (daily/weekly) frequencies.
+//! **Out of scope (post-origination servicing — belong to the loan-servicing / transaction-processor kernels, not
+//! schedule generation):** multi-disbursement/tranches after origination, interest recalculation driven by
+//! transactions, re-age / re-amortize, interest pause, mid-term rate changes, capitalized income.
 #![forbid(unsafe_code)]
 
 use bigdecimal::BigDecimal;
 use bigdecimal::RoundingMode;
 use bigdecimal::num_bigint::BigInt;
+use fc_domain_shared::{InterestCalculationPeriodMethod, InterestMethod, PeriodFrequencyType};
 use fc_money::decimal;
 use std::str::FromStr;
 
@@ -102,7 +108,7 @@ pub struct PeriodBoundary {
     pub due: time::Date,
 }
 
-/// Inputs for a simple-disbursement declining-balance schedule.
+/// Inputs for a simple-disbursement schedule (declining-balance or flat).
 #[derive(Clone, Debug)]
 pub struct ScheduleParams {
     /// Disbursed principal (will be normalized to `currency_scale`).
@@ -113,6 +119,13 @@ pub struct ScheduleParams {
     /// Currency minor-unit digits (e.g. 2).
     pub currency_scale: i64,
     pub mc: MathCtx,
+    pub interest_method: InterestMethod,
+    pub calc_method: InterestCalculationPeriodMethod,
+    pub frequency: PeriodFrequencyType,
+    /// Repayment-every multiple (e.g. 1 = every period, 2 = every 2 periods).
+    pub repay_every: i64,
+    /// Number of leading interest-only (principal-grace) periods.
+    pub grace_on_principal: usize,
 }
 
 /// One amortization row (all monetary fields at `currency_scale`).
@@ -144,50 +157,180 @@ fn rate_factor_by_repayment_period(
     decimal::set_scale(&r, 12, mc.mode)
 }
 
-/// Generate the per-period amortization for a fresh simple disbursement (declining balance).
-#[must_use]
-pub fn generate(params: &ScheduleParams, periods: &[PeriodBoundary]) -> Vec<PeriodResult> {
+/// Per-period rate factor reproducing the original `calculateRateFactorPerPeriod` (declining + flat share this).
+fn period_rate_factor(
+    params: &ScheduleParams,
+    rate: &BigDecimal,
+    actual_days: &BigDecimal,
+) -> BigDecimal {
     let mc = params.mc;
     let one = BigDecimal::from(1);
-    let rate = mc.div(&params.annual_rate_pct, &bd("100"));
+    let every = BigDecimal::from(params.repay_every);
     let diy = BigDecimal::from(params.day_count.days_in_year);
 
-    // per-period rate factors + (1 + rateFactor)
-    let mut rfs = Vec::with_capacity(periods.len());
-    let mut rfp1 = Vec::with_capacity(periods.len());
-    for p in periods {
-        let actual_days = BigDecimal::from((p.due - p.from).whole_days());
-        let rf = if params.day_count.days_in_month_30 {
-            rate_factor_by_repayment_period(
-                &mc,
-                &rate,
-                &bd("30"),
-                &one,
-                &diy,
-                &actual_days,
-                &actual_days,
-            )
-        } else {
-            rate_factor_by_repayment_period(&mc, &rate, &actual_days, &one, &diy, &one, &one)
-        };
-        rfp1.push(one.clone() + rf.clone()); // 1 + rf (exact)
-        rfs.push(rf);
+    // SAME_AS_REPAYMENT_PERIOD: monthly -> /12, weekly -> /52 (original short-circuits these).
+    if params.calc_method == InterestCalculationPeriodMethod::SameAsRepaymentPeriod {
+        match params.frequency {
+            PeriodFrequencyType::Months => {
+                return rate_factor_by_repayment_period(
+                    &mc,
+                    rate,
+                    &one,
+                    &every,
+                    &bd("12"),
+                    actual_days,
+                    actual_days,
+                );
+            }
+            PeriodFrequencyType::Weeks => {
+                return rate_factor_by_repayment_period(
+                    &mc,
+                    rate,
+                    &one,
+                    &every,
+                    &bd("52"),
+                    actual_days,
+                    actual_days,
+                );
+            }
+            _ => {}
+        }
     }
+    // DAILY (and SAME fall-through): branch on day-count-in-month.
+    if params.day_count.days_in_month_30 {
+        let mult = match params.frequency {
+            PeriodFrequencyType::Months => bd("30"),
+            PeriodFrequencyType::Weeks => bd("7"),
+            _ => one.clone(), // DAYS
+        };
+        rate_factor_by_repayment_period(&mc, rate, &mult, &every, &diy, actual_days, actual_days)
+    } else {
+        // ACTUAL: rate * actualDays / daysInYear (repay-every folded into actualDays via the boundaries)
+        rate_factor_by_repayment_period(&mc, rate, actual_days, &one, &diy, &one, &one)
+    }
+}
 
-    // EMI = (rateFactorN * outstanding) / fnResult, all in MathContext sig figs, then currency-scale rounded.
+/// EMI annuity value (declining balance): `(rateFactorN * outstanding) / fnResult`, MathContext sig figs, then
+/// currency-scale rounded.
+fn annuity_emi(
+    rfs: &[BigDecimal],
+    outstanding: &BigDecimal,
+    mc: &MathCtx,
+    scale: i64,
+) -> BigDecimal {
+    let one = BigDecimal::from(1);
+    let rfp1: Vec<BigDecimal> = rfs.iter().map(|rf| one.clone() + rf.clone()).collect();
     let rate_factor_n = rfp1.iter().fold(one.clone(), |acc, v| mc.mul(&acc, v));
     let fn_result = rfp1
         .iter()
         .skip(1)
         .fold(one.clone(), |f, v| mc.add(&mc.mul(&f, v), &one));
-    let disbursed = decimal::set_scale(&params.disbursed, params.currency_scale, mc.mode);
-    let emi_unrounded = mc.div(&mc.mul(&rate_factor_n, &disbursed), &fn_result);
-    let base_emi = decimal::set_scale(&emi_unrounded, params.currency_scale, mc.mode);
+    let emi_unrounded = mc.div(&mc.mul(&rate_factor_n, outstanding), &fn_result);
+    decimal::set_scale(&emi_unrounded, scale, mc.mode)
+}
 
+/// Generate the per-period schedule for a fresh simple disbursement (declining balance or flat; any frequency,
+/// calc method, day count, repay-every, and leading principal grace).
+#[must_use]
+pub fn generate(params: &ScheduleParams, periods: &[PeriodBoundary]) -> Vec<PeriodResult> {
+    let mc = params.mc;
     let scale = params.currency_scale;
-    let mut schedule = distribute(&base_emi, &rfs, &disbursed, scale, mc.mode);
-    adjust_emi(&mut schedule, &rfs, &disbursed, scale, &mc);
-    schedule
+    let mode = mc.mode;
+    let rate = mc.div(&params.annual_rate_pct, &bd("100"));
+    let disbursed = decimal::set_scale(&params.disbursed, scale, mode);
+
+    let rfs: Vec<BigDecimal> = periods
+        .iter()
+        .map(|p| {
+            period_rate_factor(
+                params,
+                &rate,
+                &BigDecimal::from((p.due - p.from).whole_days()),
+            )
+        })
+        .collect();
+
+    match params.interest_method {
+        InterestMethod::Flat => flat_schedule(&rfs, &disbursed, scale, mode, &mc),
+        _ => {
+            let gp = params.grace_on_principal.min(rfs.len());
+            if gp == 0 {
+                let base = annuity_emi(&rfs, &disbursed, &mc, scale);
+                let mut s = distribute(&base, &rfs, &disbursed, scale, mode);
+                adjust_emi(&mut s, &rfs, &disbursed, scale, &mc);
+                s
+            } else {
+                // leading interest-only grace periods (no principal), then annuity over the remainder on disbursed
+                let mut out: Vec<PeriodResult> = rfs[..gp]
+                    .iter()
+                    .map(|rf| {
+                        let interest =
+                            decimal::set_scale(&(disbursed.clone() * rf.clone()), scale, mode);
+                        let zero = decimal::set_scale(&BigDecimal::from(0), scale, mode);
+                        PeriodResult {
+                            emi: interest.clone(),
+                            principal: zero,
+                            interest,
+                            outstanding: disbursed.clone(),
+                        }
+                    })
+                    .collect();
+                let rest = &rfs[gp..];
+                let base = annuity_emi(rest, &disbursed, &mc, scale);
+                let mut tail = distribute(&base, rest, &disbursed, scale, mode);
+                adjust_emi(&mut tail, rest, &disbursed, scale, &mc);
+                out.extend(tail);
+                out
+            }
+        }
+    }
+}
+
+/// Flat-interest schedule (original `calculateEMIOnActualModelWithFlatInterestMethod`, fresh case): interest is on the
+/// original principal each period; `EMI = (principal + Σinterest) / n`, last period carries the rounding remainder.
+fn flat_schedule(
+    rfs: &[BigDecimal],
+    disbursed: &BigDecimal,
+    scale: i64,
+    mode: RoundingMode,
+    mc: &MathCtx,
+) -> Vec<PeriodResult> {
+    let n = rfs.len();
+    let interests: Vec<BigDecimal> = rfs
+        .iter()
+        .map(|rf| decimal::set_scale(&(disbursed.clone() * rf.clone()), scale, mode))
+        .collect();
+    let total = decimal::set_scale(
+        &interests
+            .iter()
+            .fold(disbursed.clone(), |acc, i| acc + i.clone()),
+        scale,
+        mode,
+    );
+    let period_emi = decimal::set_scale(&mc.div(&total, &BigDecimal::from(n as i64)), scale, mode);
+    let remainder = decimal::set_scale(
+        &(total.clone() - period_emi.clone() * BigDecimal::from(n as i64)),
+        scale,
+        mode,
+    );
+    let mut out = Vec::with_capacity(n);
+    let mut outstanding = disbursed.clone();
+    for (i, interest) in interests.iter().enumerate() {
+        let emi_i = if i == n - 1 {
+            decimal::set_scale(&(period_emi.clone() + remainder.clone()), scale, mode)
+        } else {
+            period_emi.clone()
+        };
+        let principal = decimal::set_scale(&(emi_i.clone() - interest.clone()), scale, mode);
+        outstanding = decimal::set_scale(&(outstanding.clone() - principal.clone()), scale, mode);
+        out.push(PeriodResult {
+            emi: emi_i,
+            principal,
+            interest: interest.clone(),
+            outstanding: outstanding.clone(),
+        });
+    }
+    out
 }
 
 /// Spread `base_emi` across the periods (declining balance); the last period (or any that would overpay) closes the

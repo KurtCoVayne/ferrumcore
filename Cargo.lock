@@ -43,6 +43,7 @@ name = "fc-loan-schedule"
 version = "0.0.0"
 dependencies = [
  "bigdecimal",
+ "fc-domain-shared",
  "fc-money",
  "time",
 ]
