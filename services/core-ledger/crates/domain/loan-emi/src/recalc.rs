@@ -92,8 +92,11 @@ pub struct Model {
     pub mc: Mc,
     pub scale: i64,
     pub mode: RoundingMode,
-    /// Nominal interest rate as a fraction (annual % / 100).
+    /// Base nominal interest rate as a fraction (annual % / 100).
     pub rate: BigDecimal,
+    /// Interest-rate changes as `(effective_date, rate_fraction)` — the rate in force on a date is the one with the
+    /// latest `effective_date ≤ date`, else [`Model::rate`] (`addInterestRate` / `getInterestRate`).
+    pub interest_rates: Vec<(Date, BigDecimal)>,
     pub day_count: DayCount,
     pub interest_method: InterestMethod,
     pub emi_recalculation_enabled: bool,
@@ -139,6 +142,16 @@ impl Model {
 
     // --- rate factors ---
 
+    /// `getInterestRate(date)` — the rate fraction in force on `date`: the latest interest-rate change with
+    /// `effective_date ≤ date`, else the base [`Model::rate`].
+    fn get_interest_rate(&self, date: Date) -> &BigDecimal {
+        self.interest_rates
+            .iter()
+            .filter(|(eff, _)| *eff <= date)
+            .max_by_key(|(eff, _)| *eff)
+            .map_or(&self.rate, |(_, r)| r)
+    }
+
     /// `calculateRateFactorPerPeriod` — the per-interest-period rate factor (proportional to the interest-period length
     /// within the repayment period): DAYS_360/DAYS_30 → `rate × 30 × repayEvery / 360 × ipLen / rpLen`.
     fn rate_factor_ip(
@@ -148,10 +161,11 @@ impl Model {
         rp_from: Date,
         rp_due: Date,
     ) -> BigDecimal {
+        let rate = self.get_interest_rate(ip_from);
         match self.day_count {
             DayCount::Days360Days30 { repay_every } => rate_factor_by_repayment_period(
                 &self.mc,
-                &self.rate,
+                rate,
                 &BigDecimal::from(30),
                 &BigDecimal::from(repay_every),
                 &BigDecimal::from(360),
@@ -160,25 +174,31 @@ impl Model {
             ),
             DayCount::ActualActual {
                 recognition_on_disbursement,
-            } => self.actual_actual_rate_factor(ip_from, ip_due, recognition_on_disbursement),
+            } => self.actual_actual_rate_factor(rate, ip_from, ip_due, recognition_on_disbursement),
         }
     }
 
     /// ACTUAL/ACTUAL rate factor over `[from, due)`: `rate × actualDays / Year.length` within one year, or the
     /// cumulated year-fraction (set to precision decimals) when the interval crosses a year boundary.
-    fn actual_actual_rate_factor(&self, from: Date, due: Date, recognition: bool) -> BigDecimal {
+    fn actual_actual_rate_factor(
+        &self,
+        rate: &BigDecimal,
+        from: Date,
+        due: Date,
+        recognition: bool,
+    ) -> BigDecimal {
         let one = BigDecimal::from(1);
         if due.year() > from.year() {
             let cpf = crate::schedule::calculate_period_fractions(&self.mc, from, due, recognition);
             decimal::set_scale(
-                &self.mc.mul(&self.rate, &cpf),
+                &self.mc.mul(rate, &cpf),
                 i64::from(self.mc.precision),
                 self.mc.mode,
             )
         } else {
             rate_factor_by_repayment_period(
                 &self.mc,
-                &self.rate,
+                rate,
                 &BigDecimal::from((due - from).whole_days()),
                 &one,
                 &BigDecimal::from(crate::schedule::year_len(from.year())),
@@ -192,10 +212,11 @@ impl Model {
     /// (`rateFactorTillPeriodDueDate`): DAYS_360/DAYS_30 → `rate × 30 × periodRatio / 360 × (rpDue − ipFrom) / rpLen`
     /// with `periodRatio = repayEvery` for a regular monthly schedule.
     fn rate_factor_till(&self, ip_from: Date, rp_from: Date, rp_due: Date) -> BigDecimal {
+        let rate = self.get_interest_rate(ip_from);
         match self.day_count {
             DayCount::Days360Days30 { repay_every } => rate_factor_by_repayment_period(
                 &self.mc,
-                &self.rate,
+                rate,
                 &BigDecimal::from(30),
                 &BigDecimal::from(repay_every),
                 &BigDecimal::from(360),
@@ -204,7 +225,7 @@ impl Model {
             ),
             DayCount::ActualActual {
                 recognition_on_disbursement,
-            } => self.actual_actual_rate_factor(ip_from, rp_due, recognition_on_disbursement),
+            } => self.actual_actual_rate_factor(rate, ip_from, rp_due, recognition_on_disbursement),
         }
     }
 
@@ -1259,6 +1280,7 @@ pub fn new_declining_balance_with_day_count(
         scale,
         mode,
         rate,
+        interest_rates: Vec::new(),
         day_count,
         interest_method: InterestMethod::DecliningBalance,
         emi_recalculation_enabled: true,
