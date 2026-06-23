@@ -71,6 +71,11 @@ impl Money {
     pub fn is_greater_than_zero(&self) -> bool {
         decimal::compare(&self.amount, &BigDecimal::from(0)) > 0
     }
+    /// `this < 0` (Java `Money.isLessThanZero`).
+    #[must_use]
+    pub fn is_less_than_zero(&self) -> bool {
+        decimal::compare(&self.amount, &BigDecimal::from(0)) < 0
+    }
     /// `this > other` (Java `Money.isGreaterThan`).
     #[must_use]
     pub fn is_greater_than(&self, other: &Money) -> bool {

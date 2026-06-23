@@ -12,6 +12,7 @@ members = [
     "services/core-ledger/crates/domain/loan-lifecycle",
     "services/core-ledger/crates/domain/loan-schedule",
     "services/core-ledger/crates/domain/loan-allocation",
+    "services/core-ledger/crates/domain/loan-emi",
 ]
 
 [workspace.package]

@@ -1,0 +1,18 @@
+[package]
+name = "fc-loan-emi"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Progressive loan EMI / interest-schedule engine (C1/C2) — faithful port of ProgressiveEMICalculator + its model."
+
+[lints]
+workspace = true
+
+[dependencies]
+bigdecimal = { workspace = true }
+time = { workspace = true }
+fc-money = { workspace = true }
+
+[dev-dependencies]
+fc-money = { workspace = true }
