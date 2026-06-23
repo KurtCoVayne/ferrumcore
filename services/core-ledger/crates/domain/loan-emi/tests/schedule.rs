@@ -341,6 +341,34 @@ fn repayment_schedule_actual_actual_across_years() {
     check_period(&model, 5, "857.73", "6.97", "850.76", "0.00");
 }
 
+/// `test_actual_actual_repayment_schedule_disbursement_near_month_end`: 1500 @ 9.4822%, ACTUAL/ACTUAL, six
+/// near-month-end periods crossing 2021→2022, HALF_UP. Exact per-period golden.
+#[test]
+fn repayment_schedule_actual_actual_near_month_end() {
+    let periods = [
+        (d(2021, Month::October, 30), d(2021, Month::November, 30)),
+        (d(2021, Month::November, 30), d(2021, Month::December, 30)),
+        (d(2021, Month::December, 30), d(2022, Month::January, 30)),
+        (d(2022, Month::January, 30), d(2022, Month::February, 28)),
+        (d(2022, Month::February, 28), d(2022, Month::March, 30)),
+        (d(2022, Month::March, 30), d(2022, Month::April, 30)),
+    ];
+    let model = generate_declining_balance(
+        &periods,
+        &bd("1500"),
+        &bd("9.4822"),
+        DayCountKind::ActualActual,
+        2,
+        RoundingMode::HalfUp,
+    );
+    check_period(&model, 0, "256.95", "12.08", "244.87", "1255.13");
+    check_period(&model, 1, "256.95", "9.78", "247.17", "1007.96");
+    check_period(&model, 2, "256.95", "8.12", "248.83", "759.13");
+    check_period(&model, 3, "256.95", "5.72", "251.23", "507.90");
+    check_period(&model, 4, "256.95", "3.96", "252.99", "254.91");
+    check_period(&model, 5, "256.96", "2.05", "254.91", "0.00");
+}
+
 /// `test_actual_actual_repayment_schedule_disbursement_month_end` (generation block): 245000 @ 45% nominal,
 /// ACTUAL/ACTUAL, six month-end periods crossing 2023→2024, HALF_UP. Exact per-period golden.
 #[test]
