@@ -42,6 +42,47 @@ fn check_rp(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
+fn check_ip(
+    model: &Model,
+    i: usize,
+    k: usize,
+    emi: &str,
+    rate_factor: &str,
+    calc_interest: &str,
+    cum_interest: &str,
+    principal: &str,
+    outstanding: &str,
+) {
+    assert_eq!(model.period_emi(i).to_plain_string(), emi, "rp{i} emi");
+    assert_eq!(
+        fc_money::decimal::to_plain_string(&model.ip_rate_factor(i, k)),
+        rate_factor,
+        "rp{i} ip{k} rateFactor"
+    );
+    // calculatedDueInterest is full-precision; the Java goldens compare as doubles, so normalize away trailing zeros.
+    assert_eq!(
+        fc_money::decimal::to_plain_string(&model.ip_calc_due_interest(i, k).normalized()),
+        fc_money::decimal::to_plain_string(&bd(calc_interest).normalized()),
+        "rp{i} ip{k} calculatedDueInterest"
+    );
+    assert_eq!(
+        model.period_due_interest(i).to_plain_string(),
+        cum_interest,
+        "rp{i} dueInterest"
+    );
+    assert_eq!(
+        model.period_due_principal(i).to_plain_string(),
+        principal,
+        "rp{i} duePrincipal"
+    );
+    assert_eq!(
+        model.period_outstanding(i).to_plain_string(),
+        outstanding,
+        "rp{i} outstanding"
+    );
+}
+
 fn six_monthly() -> Vec<(Date, Date)> {
     vec![
         (d(2024, Month::January, 1), d(2024, Month::February, 1)),
@@ -86,4 +127,189 @@ fn payoff_fresh_disbursement() {
     check_rp(&model, 3, "17.01", "0.29", "16.72", "33.71");
     check_rp(&model, 4, "17.01", "0.20", "16.81", "16.90");
     check_rp(&model, 5, "17.00", "0.10", "16.90", "0.00");
+}
+
+/// Stage 2: the two early payments with balance corrections (the body of `test_payoff_on0215_*`). Each `payPrincipal`
+/// pays more than the scheduled principal (interest is lower when paying before the due date), splitting the interest
+/// period at the transaction date and cascading the recalculated balances + EMI.
+#[test]
+fn payoff_two_payments_with_balance_correction() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    let feb1 = d(2024, Month::February, 1);
+    let mar1 = d(2024, Month::March, 1);
+    let apr1 = d(2024, Month::April, 1);
+    let feb15 = d(2024, Month::February, 15);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    // pay off period 1 (Feb1-Mar1) early on Feb15 with balance correction.
+    model.pay_principal(feb1, mar1, feb15, &m("16.77"));
+    model.pay_interest(feb1, mar1, feb15, &m("0.24"));
+
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.005833333333",
+        "0.5833333333",
+        "0.58",
+        "16.43",
+        "83.57",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.002816091954",
+        "0.235340804584",
+        "0.24",
+        "16.77",
+        "66.80",
+    );
+    check_ip(
+        &model,
+        1,
+        1,
+        "17.01",
+        "0.003017241379",
+        "0.201551724117",
+        "0.24",
+        "16.77",
+        "66.80",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.389666666644",
+        "0.59",
+        "16.42",
+        "50.38",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.293883333317",
+        "0.29",
+        "16.72",
+        "33.66",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.196349999989",
+        "0.20",
+        "16.81",
+        "16.85",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "16.95",
+        "0.005833333333",
+        "0.098291666661",
+        "0.10",
+        "16.85",
+        "0.00",
+    );
+
+    // totally pay off period 2 (Mar1-Apr1) on Mar1; the correction lands on period 1 (Mar1 is rp1's due date).
+    model.pay_principal(mar1, apr1, mar1, &m("16.42"));
+    model.pay_interest(mar1, apr1, mar1, &m("0.49"));
+
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.005833333333",
+        "0.5833333333",
+        "0.58",
+        "16.43",
+        "83.57",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.002816091954",
+        "0.235340804584",
+        "0.24",
+        "16.77",
+        "50.38",
+    );
+    check_ip(
+        &model,
+        1,
+        1,
+        "17.01",
+        "0.003017241379",
+        "0.201551724117",
+        "0.24",
+        "16.77",
+        "50.38",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.293883333317",
+        "0.49",
+        "16.52",
+        "50.28",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.293299999983",
+        "0.29",
+        "16.72",
+        "33.56",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.195766666655",
+        "0.20",
+        "16.81",
+        "16.75",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "16.85",
+        "0.005833333333",
+        "0.0977083333278",
+        "0.10",
+        "16.75",
+        "0.00",
+    );
 }
