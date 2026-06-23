@@ -188,7 +188,9 @@ fn disbursed_1000_no_interest() {
         &periods,
         &bd("1000"),
         &bd("0"),
-        DayCountKind::ActualActual,
+        DayCountKind::ActualActual {
+            recognition_on_disbursement: false,
+        },
         2,
         RoundingMode::HalfEven,
     );
@@ -329,7 +331,9 @@ fn repayment_schedule_actual_actual_across_years() {
         &periods,
         &bd("5000"),
         &bd("9.99"),
-        DayCountKind::ActualActual,
+        DayCountKind::ActualActual {
+            recognition_on_disbursement: false,
+        },
         2,
         RoundingMode::HalfUp,
     );
@@ -339,6 +343,37 @@ fn repayment_schedule_actual_actual_across_years() {
     check_period(&model, 3, "857.71", "20.04", "837.67", "1694.14");
     check_period(&model, 4, "857.71", "14.33", "843.38", "850.76");
     check_period(&model, 5, "857.73", "6.97", "850.76", "0.00");
+}
+
+/// `test_actual_actual_fraction_period_calculation_with_interestRecognitionFromDisbursementDate_true`: same loan as the
+/// across-years case but with `isInterestRecognitionOnDisbursementDate = true`, so the year-boundary split is at Jan 1
+/// (not Dec 31) — yielding EMI 857.72 (vs 857.71). Exact per-period golden.
+#[test]
+fn repayment_schedule_actual_actual_recognition_on_disbursement() {
+    let periods = [
+        (d(2023, Month::November, 13), d(2023, Month::December, 13)),
+        (d(2023, Month::December, 13), d(2024, Month::January, 13)),
+        (d(2024, Month::January, 13), d(2024, Month::February, 13)),
+        (d(2024, Month::February, 13), d(2024, Month::March, 13)),
+        (d(2024, Month::March, 13), d(2024, Month::April, 13)),
+        (d(2024, Month::April, 13), d(2024, Month::May, 13)),
+    ];
+    let model = generate_declining_balance(
+        &periods,
+        &bd("5000"),
+        &bd("9.99"),
+        DayCountKind::ActualActual {
+            recognition_on_disbursement: true,
+        },
+        2,
+        RoundingMode::HalfUp,
+    );
+    check_period(&model, 0, "857.72", "41.05", "816.67", "4183.33");
+    check_period(&model, 1, "857.72", "35.46", "822.26", "3361.07");
+    check_period(&model, 2, "857.72", "28.44", "829.28", "2531.79");
+    check_period(&model, 3, "857.72", "20.04", "837.68", "1694.11");
+    check_period(&model, 4, "857.72", "14.33", "843.39", "850.72");
+    check_period(&model, 5, "857.69", "6.97", "850.72", "0.00");
 }
 
 /// `test_actual_actual_repayment_schedule_disbursement_near_month_end`: 1500 @ 9.4822%, ACTUAL/ACTUAL, six
@@ -357,7 +392,9 @@ fn repayment_schedule_actual_actual_near_month_end() {
         &periods,
         &bd("1500"),
         &bd("9.4822"),
-        DayCountKind::ActualActual,
+        DayCountKind::ActualActual {
+            recognition_on_disbursement: false,
+        },
         2,
         RoundingMode::HalfUp,
     );
@@ -385,7 +422,9 @@ fn repayment_schedule_actual_actual_month_end() {
         &periods,
         &bd("245000"),
         &bd("45.0"),
-        DayCountKind::ActualActual,
+        DayCountKind::ActualActual {
+            recognition_on_disbursement: false,
+        },
         2,
         RoundingMode::HalfUp,
     );

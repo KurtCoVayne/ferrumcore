@@ -57,8 +57,9 @@ pub enum DayCountKind {
     /// ACTUAL days-in-month with a **fixed** days-in-year (e.g. DAYS_364, DAYS_365): `rate × actualDays / daysInYear`,
     /// no year-boundary split. Covers weekly/daily/15-day frequencies under a fixed year.
     ActualFixedYear { days_in_year: i64 },
-    /// ACTUAL / ACTUAL (year-boundary split at Dec 31).
-    ActualActual,
+    /// ACTUAL / ACTUAL. The year-boundary split is at **Dec 31** normally, or at **Jan 1** of the next year when
+    /// `recognition_on_disbursement` is set (`isInterestRecognitionOnDisbursementDate`).
+    ActualActual { recognition_on_disbursement: bool },
 }
 
 /// `PeriodDueDetails` — the due amounts of one repayment period (`getDueAmounts`).
@@ -115,10 +116,18 @@ fn year_len(year: i32) -> i64 {
 fn dec_31(year: i32, fallback: Date) -> Date {
     Date::from_calendar_date(year, Month::December, 31).unwrap_or(fallback)
 }
+fn jan_1(year: i32, fallback: Date) -> Date {
+    Date::from_calendar_date(year, Month::January, 1).unwrap_or(fallback)
+}
 
-/// `calculatePeriodFractions` (src line 1550): `Σ_year (daysInSegment / Year.length(year))`, segments split at Dec 31
-/// (`isInterestRecognitionOnDisbursementDate == false`), each division + accumulation at the MathContext.
-fn calculate_period_fractions(mc: &Mc, from: Date, due: Date) -> BigDecimal {
+/// `calculatePeriodFractions` (src line 1550): `Σ_year (daysInSegment / Year.length(year))`. The end-of-year split is
+/// `getFractionPeriodDueDateForEndOfYear`: Jan 1 of the next year when `recognition_on_disbursement`, else Dec 31.
+fn calculate_period_fractions(
+    mc: &Mc,
+    from: Date,
+    due: Date,
+    recognition_on_disbursement: bool,
+) -> BigDecimal {
     let mut cumulated = BigDecimal::from(0);
     let mut actual_year = from.year();
     let end_year = due.year();
@@ -126,6 +135,8 @@ fn calculate_period_fractions(mc: &Mc, from: Date, due: Date) -> BigDecimal {
     while actual_year <= end_year {
         let fraction_due = if actual_year == end_year {
             due
+        } else if recognition_on_disbursement {
+            jan_1(actual_year + 1, due)
         } else {
             dec_31(actual_year, due)
         };
@@ -169,10 +180,12 @@ fn period_rate_factor(
                 &one,
             )
         }
-        DayCountKind::ActualActual => {
+        DayCountKind::ActualActual {
+            recognition_on_disbursement,
+        } => {
             if due.year() > from.year() {
                 // Partial period: rate × cumulatedFractions, fixed to precision decimals.
-                let cpf = calculate_period_fractions(mc, from, due);
+                let cpf = calculate_period_fractions(mc, from, due, recognition_on_disbursement);
                 decimal::set_scale(&mc.mul(rate, &cpf), i64::from(mc.precision), mc.mode)
             } else {
                 let days = (due - from).whole_days();
