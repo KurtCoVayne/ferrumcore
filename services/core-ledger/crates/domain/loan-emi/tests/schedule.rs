@@ -321,6 +321,35 @@ fn flat_360_30_monthly() {
     check_period(&model, 3, "195.00", "7.50", "187.50", "0.00");
 }
 
+/// `testFlatDaily_1_Month_Actual_Actual` (first disbursement block): 700 @ 12% FLAT, ACTUAL/ACTUAL, 4 monthly periods
+/// in 2024 (leap year → daysInYear 366). Flat interest varies with the actual month length (Jan 31 → 7.11, Feb 29 →
+/// 6.66, …), EMI 181.94 with the rounding remainder on the last period.
+#[test]
+fn flat_actual_actual_monthly() {
+    let periods: Vec<(Date, Date)> = (0..4)
+        .map(|i| {
+            (
+                first_of(2024, month_of(1 + i)),
+                first_of(2024, month_of(2 + i)),
+            )
+        })
+        .collect();
+    let model = generate_flat(
+        &periods,
+        &bd("700"),
+        &bd("12.0"),
+        DayCountKind::ActualActual {
+            recognition_on_disbursement: false,
+        },
+        2,
+        RoundingMode::HalfEven,
+    );
+    check_period(&model, 0, "181.94", "7.11", "174.83", "525.17");
+    check_period(&model, 1, "181.94", "6.66", "175.28", "349.89");
+    check_period(&model, 2, "181.94", "7.11", "174.83", "175.06");
+    check_period(&model, 3, "181.95", "6.89", "175.06", "0.00");
+}
+
 /// `test_sameAsRepayment_month_repay_every_1_periods_3` (first disbursement block): 1000 @ 12%, monthly,
 /// SAME_AS_REPAYMENT_PERIOD, FLAT method, 3 periods → rate factor 12%/12 = 0.01, flat interest 10/period, EMI 343.33.
 #[test]
