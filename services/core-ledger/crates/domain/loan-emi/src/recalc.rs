@@ -853,6 +853,74 @@ impl Model {
             .position(|p| p.from == from && p.due == due)
     }
 
+    /// `creditPrincipal` — a chargeback that re-adds principal.
+    pub fn credit_principal(&mut self, transaction_date: Date, amount: &Money) {
+        let z = self.zero();
+        self.add_credit(transaction_date, amount, &z);
+    }
+
+    /// `creditInterest` — a chargeback that re-adds interest.
+    pub fn credit_interest(&mut self, transaction_date: Date, amount: &Money) {
+        let z = self.zero();
+        self.add_credit(transaction_date, &z, amount);
+    }
+
+    /// `addCredit` — apply the credited principal as a positive balance correction (raising the outstanding at the
+    /// transaction date) and record the credited principal / interest on the interest period starting on that date.
+    fn add_credit(
+        &mut self,
+        transaction_date: Date,
+        credited_principal: &Money,
+        credited_interest: &Money,
+    ) {
+        let z = self.zero();
+        if let Some(rp_idx) =
+            self.change_outstanding_and_split(transaction_date, &z, credited_principal, &z)
+        {
+            self.add_credited_amounts_to_interest_period(
+                transaction_date,
+                credited_principal,
+                credited_interest,
+            );
+            self.calculate_rate_factor_for_repayment_period(rp_idx);
+            self.calculate_outstanding_balance();
+            self.calculate_last_unpaid_emi();
+        }
+    }
+
+    /// `addCreditedAmountsToInterestPeriod` — find the period whose credit range contains `transaction_date` (non-last:
+    /// `from ≤ date < due`; last: `from ≤ date ≤ due`) and add the credited amounts to the (last) interest period
+    /// starting on that date.
+    fn add_credited_amounts_to_interest_period(
+        &mut self,
+        transaction_date: Date,
+        credited_principal: &Money,
+        credited_interest: &Money,
+    ) {
+        let n = self.periods.len();
+        let rp = self.periods.iter().enumerate().position(|(idx, p)| {
+            if idx == n - 1 {
+                transaction_date >= p.from && transaction_date <= p.due
+            } else {
+                transaction_date >= p.from && transaction_date < p.due
+            }
+        });
+        if let Some(rp_idx) = rp {
+            let k = self.periods[rp_idx]
+                .interest_periods
+                .iter()
+                .enumerate()
+                .filter(|(_, ip)| ip.from == transaction_date)
+                .map(|(k, _)| k)
+                .next_back();
+            if let Some(k) = k {
+                let ip = &mut self.periods[rp_idx].interest_periods[k];
+                ip.credited_principal = ip.credited_principal.plus(credited_principal);
+                ip.credited_interest = ip.credited_interest.plus(credited_interest);
+            }
+        }
+    }
+
     /// `findRepaymentPeriod(targetDate)` — the period whose `isInPeriod(date, from, due, isFirstRepaymentPeriod)` holds.
     fn find_period_containing(&self, date: Date) -> Option<usize> {
         self.periods.iter().enumerate().position(|(idx, p)| {

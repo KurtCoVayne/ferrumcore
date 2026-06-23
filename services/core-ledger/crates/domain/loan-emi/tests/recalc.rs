@@ -469,3 +469,96 @@ fn fully_repay_on_feb15() {
         assert!(model.period_fully_paid(i), "period {i} fully paid");
     }
 }
+
+/// `test_S1_full_chargeback_on_due_date_before_maturity_date`: after repaying periods 0 and 1, a full chargeback
+/// (`creditPrincipal` 17.01) on Mar 1 re-adds principal — raising the outstanding via a balance correction on the
+/// period ending Mar 1 and recording the credited principal on period 2 (so its due principal jumps to 33.53).
+#[test]
+fn chargeback_full_on_due_date() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1);
+    let mar1 = d(2024, Month::March, 1);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    model.pay_principal(jan1, feb1, feb1, &m("16.43"));
+    model.pay_interest(jan1, feb1, feb1, &m("0.58"));
+    model.pay_principal(feb1, mar1, mar1, &m("16.52"));
+    model.pay_interest(feb1, mar1, mar1, &m("0.49"));
+
+    model.credit_principal(mar1, &m("17.01"));
+
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.005833333333",
+        "0.5833333333",
+        "0.58",
+        "16.43",
+        "83.57",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.487491666639",
+        "0.49",
+        "16.52",
+        "84.06",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.490349999973",
+        "0.49",
+        "33.53",
+        "50.53",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.294758333316",
+        "0.29",
+        "16.72",
+        "33.81",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.197224999989",
+        "0.20",
+        "16.81",
+        "17.00",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "17.10",
+        "0.005833333333",
+        "0.0991666666611",
+        "0.10",
+        "17.00",
+        "0.00",
+    );
+}
