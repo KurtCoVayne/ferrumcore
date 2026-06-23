@@ -112,7 +112,7 @@ impl Model {
 }
 
 /// `Year.length()` — 366 in leap years, else 365.
-fn year_len(year: i32) -> i64 {
+pub(crate) fn year_len(year: i32) -> i64 {
     if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
         366
     } else {
@@ -139,7 +139,7 @@ fn jan_1(year: i32, fallback: Date) -> Date {
 
 /// `calculatePeriodFractions` (src line 1550): `Σ_year (daysInSegment / Year.length(year))`. The end-of-year split is
 /// `getFractionPeriodDueDateForEndOfYear`: Jan 1 of the next year when `recognition_on_disbursement`, else Dec 31.
-fn calculate_period_fractions(
+pub(crate) fn calculate_period_fractions(
     mc: &Mc,
     from: Date,
     due: Date,

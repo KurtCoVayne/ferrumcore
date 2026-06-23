@@ -5,7 +5,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code
 
 use bigdecimal::{BigDecimal, RoundingMode};
-use fc_loan_emi::recalc::{Model, new_declining_balance};
+use fc_loan_emi::recalc::{
+    DayCount, Model, new_declining_balance, new_declining_balance_with_day_count,
+};
 use std::str::FromStr;
 use time::{Date, Month};
 
@@ -1237,4 +1239,59 @@ fn interest_pause_whole_month() {
         "16.40",
         "0.00",
     );
+}
+
+/// `test_disbursedAmt1000_actual_actual_repayEvery1Month_verify_due_principal_amounts`: 1000 @ 25% ACTUAL/ACTUAL over
+/// 12 monthly periods (crossing into 2025), paying each period's principal upfront on the disbursement date. Confirms
+/// the ACTUAL/ACTUAL day count is wired into the recalc rate factors (EMI 95.02), with interest zero (paid before
+/// accrual) and every period fully paid.
+#[test]
+fn actual_actual_pay_all_upfront() {
+    let periods: Vec<(Date, Date)> = {
+        let mut v = Vec::new();
+        let months = [
+            (2024, Month::January),
+            (2024, Month::February),
+            (2024, Month::March),
+            (2024, Month::April),
+            (2024, Month::May),
+            (2024, Month::June),
+            (2024, Month::July),
+            (2024, Month::August),
+            (2024, Month::September),
+            (2024, Month::October),
+            (2024, Month::November),
+            (2024, Month::December),
+            (2025, Month::January),
+        ];
+        for w in months.windows(2) {
+            v.push((d(w[0].0, w[0].1, 1), d(w[1].0, w[1].1, 1)));
+        }
+        v
+    };
+    let mut model = new_declining_balance_with_day_count(
+        &periods,
+        &bd("1000"),
+        &bd("25"),
+        DayCount::ActualActual {
+            recognition_on_disbursement: false,
+        },
+        2,
+        RoundingMode::HalfEven,
+    );
+    let disb = d(2024, Month::January, 1);
+    for &(from, due) in &periods {
+        let due_amounts = model.get_due_amounts(from, due, disb).unwrap();
+        if due_amounts.due_principal.is_greater_than_zero() {
+            let dp = due_amounts.due_principal.clone();
+            model.pay_principal(from, due, disb, &dp);
+        }
+    }
+
+    for i in 0..10 {
+        check_rp(&model, i, "95.02", "0.00", "95.02", "0.00");
+        assert!(model.period_fully_paid(i), "period {i} fully paid");
+    }
+    check_rp(&model, 10, "49.80", "0.00", "49.80", "0.00");
+    check_rp(&model, 11, "0.00", "0.00", "0.00", "0.00");
 }
