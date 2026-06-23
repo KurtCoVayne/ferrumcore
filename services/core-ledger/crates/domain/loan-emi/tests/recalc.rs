@@ -1295,3 +1295,143 @@ fn actual_actual_pay_all_upfront() {
     check_rp(&model, 10, "49.80", "0.00", "49.80", "0.00");
     check_rp(&model, 11, "0.00", "0.00", "0.00", "0.00");
 }
+
+/// `test_S2_S3_partial_and_full_chargeback_on_due_date_before_maturity_date`: after repaying periods 0-1, a partial
+/// chargeback (15.00) then a full chargeback (17.01) on Mar 1, asserting after each. The credited principals accumulate
+/// on period 2 (due principal 31.53 then 48.44) and the balance corrections accumulate on period 1.
+#[test]
+fn chargeback_partial_then_full() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1);
+    let mar1 = d(2024, Month::March, 1);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    model.pay_principal(jan1, feb1, feb1, &m("16.43"));
+    model.pay_interest(jan1, feb1, feb1, &m("0.58"));
+    model.pay_principal(feb1, mar1, mar1, &m("16.52"));
+    model.pay_interest(feb1, mar1, mar1, &m("0.49"));
+
+    // partial chargeback 15.00
+    model.credit_principal(mar1, &m("15.0"));
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.487491666639",
+        "0.49",
+        "16.52",
+        "82.05",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.478624999974",
+        "0.48",
+        "31.53",
+        "50.52",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.294699999983",
+        "0.29",
+        "16.72",
+        "33.80",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.197166666655",
+        "0.20",
+        "16.81",
+        "16.99",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "17.09",
+        "0.005833333333",
+        "0.0991083333276",
+        "0.10",
+        "16.99",
+        "0.00",
+    );
+
+    // full chargeback 17.01
+    model.credit_principal(mar1, &m("17.01"));
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.487491666639",
+        "0.49",
+        "16.52",
+        "99.06",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.577849999968",
+        "0.58",
+        "48.44",
+        "50.62",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.295283333316",
+        "0.30",
+        "16.71",
+        "33.91",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.197808333322",
+        "0.20",
+        "16.81",
+        "17.10",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "17.20",
+        "0.005833333333",
+        "0.0997499999943",
+        "0.10",
+        "17.10",
+        "0.00",
+    );
+}
