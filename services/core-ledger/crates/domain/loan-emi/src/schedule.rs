@@ -214,9 +214,7 @@ fn period_rate_factor(
     }
 }
 
-/// `generatePeriodInterestScheduleModel` + `addDisbursement` for the fresh declining-balance case: build the model from
-/// the repayment-period date boundaries and a single disbursement, computing the annuity EMI and the per-period
-/// due-interest / due-principal / outstanding distribution.
+/// `generatePeriodInterestScheduleModel` + `addDisbursement` for the fresh declining-balance case (no principal grace).
 #[must_use]
 pub fn generate_declining_balance(
     period_dates: &[(Date, Date)],
@@ -226,10 +224,35 @@ pub fn generate_declining_balance(
     scale: i64,
     mode: bigdecimal::RoundingMode,
 ) -> Model {
+    generate_declining_balance_grace(
+        period_dates,
+        disbursed,
+        nominal_rate_pct,
+        day_count,
+        scale,
+        mode,
+        0,
+    )
+}
+
+/// As [`generate_declining_balance`], with `grace_on_principal` leading interest-only periods (no principal); the
+/// annuity is computed over the remaining periods on the full balance, which stays put during grace.
+#[must_use]
+pub fn generate_declining_balance_grace(
+    period_dates: &[(Date, Date)],
+    disbursed: &BigDecimal,
+    nominal_rate_pct: &BigDecimal,
+    day_count: DayCountKind,
+    scale: i64,
+    mode: bigdecimal::RoundingMode,
+    grace_on_principal: usize,
+) -> Model {
     let mc = Mc::new(12, mode);
     let money = |v: &BigDecimal| Money::of(scale, mode, v);
     let rate = mc.div(nominal_rate_pct, &BigDecimal::from(100));
     let one = BigDecimal::from(1);
+    let n = period_dates.len();
+    let grace = grace_on_principal.min(n);
 
     let rate_factors: Vec<BigDecimal> = period_dates
         .iter()
@@ -238,25 +261,23 @@ pub fn generate_declining_balance(
     // rateFactorPlus1 is an EXACT add (no MathContext rounding).
     let rfp1: Vec<BigDecimal> = rate_factors.iter().map(|rf| rf + &one).collect();
 
-    // Annuity EMI = stripTrailingZeros(rateFactorN) × outstanding / stripTrailingZeros(fnResult), at currency scale.
+    // Annuity EMI over the post-grace periods: stripTrailingZeros(rateFactorN) × balance / stripTrailingZeros(fnResult).
     let rate_factor_n = rfp1
         .iter()
+        .skip(grace)
         .fold(one.clone(), |acc, v| mc.mul(&acc, v))
         .normalized();
     let fn_result = rfp1
         .iter()
-        .skip(1)
+        .skip(grace + 1)
         .fold(one.clone(), |f, v| fn_value(&mc, &f, v))
         .normalized();
-    let emi = if rfp1.is_empty() {
+    let emi = if grace >= n {
         money(&BigDecimal::from(0))
     } else {
         money(&mc.div(&mc.mul(&rate_factor_n, disbursed), &fn_result))
     };
 
-    // Distribute: declining-balance interest on the outstanding balance; principal = emi − interest; the last period
-    // closes the remaining balance.
-    let n = period_dates.len();
     let mut periods = Vec::with_capacity(n);
     let mut outstanding = money(disbursed);
     for (i, (from, due)) in period_dates.iter().enumerate() {
@@ -271,8 +292,7 @@ pub fn generate_declining_balance(
         );
         let interest = money(&calc_interest);
 
-        // Interest periods: the first repayment period carries a zero-length disbursement stub at its start (the
-        // disbursement lands on the loan start date), then the real interest period; later periods have a single one.
+        // Interest periods: the first repayment period carries a zero-length disbursement stub at its start.
         let mut interest_periods = Vec::new();
         if i == 0 {
             interest_periods.push(InterestPeriod {
@@ -290,7 +310,10 @@ pub fn generate_declining_balance(
         });
 
         let last = i == n - 1;
-        let (principal, emi_i) = if last {
+        let (principal, emi_i) = if i < grace {
+            // Interest-only grace period: no principal, EMI equals the interest, balance unchanged.
+            (money(&BigDecimal::from(0)), interest.clone())
+        } else if last {
             (outstanding.clone(), outstanding.plus(&interest))
         } else {
             (emi.minus(&interest), emi.clone())

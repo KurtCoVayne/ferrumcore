@@ -5,7 +5,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code
 
 use bigdecimal::{BigDecimal, RoundingMode};
-use fc_loan_emi::{DayCountKind, generate_declining_balance, generate_flat};
+use fc_loan_emi::{
+    DayCountKind, generate_declining_balance, generate_declining_balance_grace, generate_flat,
+};
 use std::str::FromStr;
 use time::{Date, Month};
 
@@ -317,6 +319,27 @@ fn same_as_repayment_month_flat() {
     check_period(&model, 0, "343.33", "10.00", "333.33", "666.67");
     check_period(&model, 1, "343.33", "10.00", "333.33", "333.34");
     check_period(&model, 2, "343.34", "10.00", "333.34", "0.00");
+}
+
+/// `test_principalGraceForProgressiveSchedule`: 100 @ 7%, DAYS_360/30, six monthly periods, 2 principal-grace
+/// periods → periods 0-1 interest-only (EMI 0.58, principal 0, balance 100), then annuity over periods 2-5 (EMI 25.37).
+#[test]
+fn principal_grace_360_30() {
+    let model = generate_declining_balance_grace(
+        &monthly_periods_2024_six(),
+        &bd("100"),
+        &bd("7.0"),
+        DayCountKind::Days360Days30 { repay_every: 1 },
+        2,
+        RoundingMode::HalfEven,
+        2,
+    );
+    check_period(&model, 0, "0.58", "0.58", "0.00", "100.00");
+    check_period(&model, 1, "0.58", "0.58", "0.00", "100.00");
+    check_period(&model, 2, "25.37", "0.58", "24.79", "75.21");
+    check_period(&model, 3, "25.37", "0.44", "24.93", "50.28");
+    check_period(&model, 4, "25.37", "0.29", "25.08", "25.20");
+    check_period(&model, 5, "25.35", "0.15", "25.20", "0.00");
 }
 
 /// Six monthly periods from 2024-01-01.
