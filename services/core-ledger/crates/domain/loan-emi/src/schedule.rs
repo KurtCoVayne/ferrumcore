@@ -54,6 +54,9 @@ pub struct RepaymentPeriod {
 pub enum DayCountKind {
     /// DAYS_360 / DAYS_30 with the repay-every multiplier in months.
     Days360Days30 { repay_every: i64 },
+    /// ACTUAL days-in-month with a **fixed** days-in-year (e.g. DAYS_364, DAYS_365): `rate × actualDays / daysInYear`,
+    /// no year-boundary split. Covers weekly/daily/15-day frequencies under a fixed year.
+    ActualFixedYear { days_in_year: i64 },
     /// ACTUAL / ACTUAL (year-boundary split at Dec 31).
     ActualActual,
 }
@@ -154,6 +157,18 @@ fn period_rate_factor(
             &one,
             &one,
         ),
+        DayCountKind::ActualFixedYear { days_in_year } => {
+            let days = (due - from).whole_days();
+            rate_factor_by_repayment_period(
+                mc,
+                rate,
+                &BigDecimal::from(days),
+                &one,
+                &BigDecimal::from(days_in_year),
+                &one,
+                &one,
+            )
+        }
         DayCountKind::ActualActual => {
             if due.year() > from.year() {
                 // Partial period: rate × cumulatedFractions, fixed to precision decimals.

@@ -202,6 +202,38 @@ fn disbursed_1000_no_interest() {
     );
 }
 
+/// `test_disbursedAmt100_dayInYears364_daysInMonthActual_repayEvery1Week`: 100 @ 9.4822%, DAYS_364 / ACTUAL, six
+/// weekly periods, HALF_EVEN. Exact per-period golden incl. the interest-period rate factor for rp0.
+#[test]
+fn disbursed_100_364_weekly() {
+    let periods = [
+        (d(2024, Month::January, 1), d(2024, Month::January, 8)),
+        (d(2024, Month::January, 8), d(2024, Month::January, 15)),
+        (d(2024, Month::January, 15), d(2024, Month::January, 22)),
+        (d(2024, Month::January, 22), d(2024, Month::January, 29)),
+        (d(2024, Month::January, 29), d(2024, Month::February, 5)),
+        (d(2024, Month::February, 5), d(2024, Month::February, 12)),
+    ];
+    let model = generate_declining_balance(
+        &periods,
+        &bd("100"),
+        &bd("9.4822"),
+        DayCountKind::ActualFixedYear { days_in_year: 364 },
+        2,
+        RoundingMode::HalfEven,
+    );
+    assert_eq!(
+        fc_money::decimal::to_plain_string(&model.periods[0].interest_periods[1].rate_factor),
+        "0.001823500000"
+    );
+    check_period(&model, 0, "16.77", "0.18", "16.59", "83.41");
+    check_period(&model, 1, "16.77", "0.15", "16.62", "66.79");
+    check_period(&model, 2, "16.77", "0.12", "16.65", "50.14");
+    check_period(&model, 3, "16.77", "0.09", "16.68", "33.46");
+    check_period(&model, 4, "16.77", "0.06", "16.71", "16.75");
+    check_period(&model, 5, "16.78", "0.03", "16.75", "0.00");
+}
+
 /// Six monthly periods from 2024-01-01.
 fn monthly_periods_2024_six() -> Vec<(Date, Date)> {
     (0..6)
