@@ -716,3 +716,98 @@ fn daily_interest_accrual() {
         );
     }
 }
+
+/// `test_multi_chargeback_Amt100_*`: two `creditPrincipal` chargebacks on the same date (15.00 then 16.52) plus a
+/// `creditInterest` (0.49). The credits accumulate — rp1's balance correction sums to +31.52 (outstanding 98.57) and
+/// rp2's credited principal sums to 31.52 (due principal 47.96 = 49.02 emi+credited − 1.06 interest).
+#[test]
+fn multi_chargeback() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1);
+    let mar1 = d(2024, Month::March, 1);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    model.pay_principal(jan1, feb1, feb1, &m("16.43"));
+    model.pay_interest(jan1, feb1, feb1, &m("0.58"));
+    model.pay_principal(feb1, mar1, mar1, &m("16.52"));
+    model.pay_interest(feb1, mar1, mar1, &m("0.49"));
+
+    model.credit_principal(mar1, &m("15.0"));
+    model.credit_principal(mar1, &m("16.52"));
+    model.credit_interest(mar1, &m("0.49"));
+
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.005833333333",
+        "0.5833333333",
+        "0.58",
+        "16.43",
+        "83.57",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.487491666639",
+        "0.49",
+        "16.52",
+        "98.57",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.005833333333",
+        "1.06499166663",
+        "1.06",
+        "47.96",
+        "50.61",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.295224999983",
+        "0.30",
+        "16.71",
+        "33.90",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.197749999989",
+        "0.20",
+        "16.81",
+        "17.09",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "17.19",
+        "0.005833333333",
+        "0.0996916666611",
+        "0.10",
+        "17.09",
+        "0.00",
+    );
+}
