@@ -55,9 +55,11 @@ fn check_ip(
     outstanding: &str,
 ) {
     assert_eq!(model.period_emi(i).to_plain_string(), emi, "rp{i} emi");
+    // rateFactor and calculatedDueInterest compare as doubles in Java, so normalize away trailing zeros (e.g. the
+    // disbursement-stub / paused boundary factors render as 0.000000000000 here but 0.0 in the golden).
     assert_eq!(
-        fc_money::decimal::to_plain_string(&model.ip_rate_factor(i, k)),
-        rate_factor,
+        fc_money::decimal::to_plain_string(&model.ip_rate_factor(i, k).normalized()),
+        fc_money::decimal::to_plain_string(&bd(rate_factor).normalized()),
         "rp{i} ip{k} rateFactor"
     );
     // calculatedDueInterest is full-precision; the Java goldens compare as doubles, so normalize away trailing zeros.
@@ -1018,6 +1020,221 @@ fn interest_pause_between_two_periods() {
         "0.095783333328",
         "0.10",
         "16.42",
+        "0.00",
+    );
+}
+
+/// `test_interestPauseLastDayOfMonthAmt100_*`: a pause Jan 10 – 31 inside period 0 — confirms the pause splits coexist
+/// with the disbursement stub (rp0 ends up with stub + Jan1-Jan9 + Jan9-Jan31(paused) + Jan31-Feb1).
+#[test]
+fn interest_pause_inside_first_period_with_stub() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    model.apply_interest_pause(d(2024, Month::January, 10), d(2024, Month::January, 31));
+
+    check_ip(
+        &model, 0, 0, "17.01", "0.0", "0.0", "0.17", "16.84", "83.16",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.001505376344",
+        "0.1505376344",
+        "0.17",
+        "16.84",
+        "83.16",
+    );
+    check_ip(
+        &model,
+        0,
+        2,
+        "17.01",
+        "0.004139784946",
+        "0.0",
+        "0.17",
+        "16.84",
+        "83.16",
+    );
+    check_ip(
+        &model,
+        0,
+        3,
+        "17.01",
+        "0.000188172043",
+        "0.0188172043",
+        "0.17",
+        "16.84",
+        "83.16",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.485099999971",
+        "0.49",
+        "16.52",
+        "66.64",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.38873333331",
+        "0.39",
+        "16.62",
+        "50.02",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.291783333317",
+        "0.29",
+        "16.72",
+        "33.30",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.194249999989",
+        "0.19",
+        "16.82",
+        "16.48",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "16.58",
+        "0.005833333333",
+        "0.0961333333278",
+        "0.10",
+        "16.48",
+        "0.00",
+    );
+}
+
+/// `test_interestPauseWholeMonthAmt100_*`: a pause Feb 1 – 29 (whole month, on the rp0/rp1 boundary). The pause start
+/// (Feb 1 − 1 = Jan 31) splits period 0's tail and the pause runs into period 1, leaving period 1 with almost no
+/// accrual (due interest 0.02).
+#[test]
+fn interest_pause_whole_month() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    model.apply_interest_pause(d(2024, Month::February, 1), d(2024, Month::February, 29));
+
+    check_ip(
+        &model, 0, 0, "17.01", "0.0", "0.0", "0.56", "16.45", "83.55",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.00564516129",
+        "0.564516129",
+        "0.56",
+        "16.45",
+        "83.55",
+    );
+    check_ip(
+        &model,
+        0,
+        2,
+        "17.01",
+        "0.000188172043",
+        "0.0",
+        "0.56",
+        "16.45",
+        "83.55",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.005632183908",
+        "0.0",
+        "0.02",
+        "16.99",
+        "66.56",
+    );
+    check_ip(
+        &model,
+        1,
+        1,
+        "17.01",
+        "0.000201149425",
+        "0.0168060344588",
+        "0.02",
+        "16.99",
+        "66.56",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.388266666645",
+        "0.39",
+        "16.62",
+        "49.94",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.29131666665",
+        "0.29",
+        "16.72",
+        "33.22",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.193783333322",
+        "0.19",
+        "16.82",
+        "16.40",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "16.50",
+        "0.005833333333",
+        "0.0956666666613",
+        "0.10",
+        "16.40",
         "0.00",
     );
 }
