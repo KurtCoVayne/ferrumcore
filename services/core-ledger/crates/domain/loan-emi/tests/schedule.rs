@@ -238,6 +238,31 @@ fn disbursed_100_364_weekly() {
     check_period(&model, 5, "16.78", "0.03", "16.75", "0.00");
 }
 
+/// `test_emiAdjustment_newCalculatedEmiNotBetterThanOriginal`: 100 @ 15.678%, DAYS_365 / ACTUAL, six monthly periods,
+/// HALF_EVEN. The per-period rate factor varies with the actual month length (Jan 31, Feb 29, …); the plain annuity EMI
+/// (17.43) already matches — confirming the `checkAndAdjustEmiIfNeeded` cent-loop is a no-op for this case.
+#[test]
+fn repayment_schedule_365_actual_monthly() {
+    let model = generate_declining_balance(
+        &monthly_periods_2024_six(),
+        &bd("100"),
+        &bd("15.678"),
+        DayCountKind::ActualFixedYear { days_in_year: 365 },
+        2,
+        RoundingMode::HalfEven,
+    );
+    assert_eq!(
+        fc_money::decimal::to_plain_string(&model.periods[0].interest_periods[1].rate_factor),
+        "0.013315561644"
+    );
+    check_period(&model, 0, "17.43", "1.33", "16.10", "83.90");
+    check_period(&model, 1, "17.43", "1.05", "16.38", "67.52");
+    check_period(&model, 2, "17.43", "0.90", "16.53", "50.99");
+    check_period(&model, 3, "17.43", "0.66", "16.77", "34.22");
+    check_period(&model, 4, "17.43", "0.46", "16.97", "17.25");
+    check_period(&model, 5, "17.47", "0.22", "17.25", "0.00");
+}
+
 /// `test_disbursedAmt100_dayInYears360_daysInMonthDoesntMatter_repayEvery15Days`: 100 @ 9.4822%, DAYS_360 / ACTUAL,
 /// repay every 15 days, six periods, HALF_EVEN. Exact per-period golden (fits ActualFixedYear{360}).
 #[test]
