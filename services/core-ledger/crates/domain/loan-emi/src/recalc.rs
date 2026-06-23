@@ -74,6 +74,9 @@ pub struct RepaymentPeriod {
     pub is_interest_moved_upward: bool,
     pub is_interest_moved_downward: bool,
     pub re_aged: bool,
+    pub re_aged_early_repayment_holder: bool,
+    pub credited_principal_moved_due_reage: Money,
+    pub credited_interest_moved_due_reage: Money,
     pub fixed_interest: Money,
 }
 
@@ -329,9 +332,12 @@ impl Model {
             .plus(&rp.future_unrecognized_interest)
     }
 
-    /// `RepaymentPeriod.getTotalCreditedAmount()` (no re-age moves in this slice).
+    /// `RepaymentPeriod.getTotalCreditedAmount()` — credited principal + interest, minus amounts moved away by re-aging.
     fn total_credited_amount(&self, i: usize) -> Money {
-        self.credited_principal(i).plus(&self.credited_interest(i))
+        self.credited_principal(i)
+            .plus(&self.credited_interest(i))
+            .minus(&self.periods[i].credited_interest_moved_due_reage)
+            .minus(&self.periods[i].credited_principal_moved_due_reage)
     }
     fn credited_principal(&self, i: usize) -> Money {
         let acc = self.periods[i]
@@ -1454,6 +1460,259 @@ impl Model {
         );
         (principal, interest)
     }
+
+    /// `RepaymentPeriod.getOutstandingInterest()` = negativeToZero(dueInterest − paidInterest).
+    fn outstanding_interest(&self, i: usize) -> Money {
+        neg_to_zero(
+            &self.due_interest(i).minus(&self.periods[i].paid_interest),
+            self.scale,
+            self.mode,
+        )
+    }
+
+    /// `accelerateRepaymentDueDateTo` — move the period (and its last interest period) due date to `date`, recompute.
+    fn accelerate_repayment_due_date_to(&mut self, rp_idx: usize, date: Date) {
+        self.periods[rp_idx].due = date;
+        if let Some(last) = self.periods[rp_idx].interest_periods.last_mut() {
+            last.due = date;
+        }
+        self.calculate_rate_factor_for_repayment_period(rp_idx);
+    }
+
+    /// `accelerateMaturityDateTo` — flag the period containing `date` as the re-aged early-repayment holder, accelerate
+    /// its due date to `date`, and drop all periods after it.
+    fn accelerate_maturity_date_to(&mut self, date: Date) {
+        let Some(rp_idx) = self.find_period_containing(date) else {
+            return;
+        };
+        self.periods[rp_idx].re_aged_early_repayment_holder = true;
+        if self.periods[rp_idx].due != date {
+            self.accelerate_repayment_due_date_to(rp_idx, date);
+        }
+        if rp_idx != self.periods.len() - 1 {
+            self.periods.retain(|p| p.due <= date);
+        }
+    }
+
+    /// `calculatePaidBalancesAfterDate` — sum of paid principal / interest in periods due on or after `date`.
+    fn calculate_paid_balances_after_date(&self, date: Date) -> (Money, Money) {
+        let mut principal = self.zero();
+        let mut interest = self.zero();
+        for p in &self.periods {
+            if p.due >= date {
+                principal = principal.plus(&p.paid_principal);
+                interest = interest.plus(&p.paid_interest);
+            }
+        }
+        (principal, interest)
+    }
+
+    /// `createRepaymentPeriodForEarlyRepaidAmountsDuringReAgeing` — fold the already-paid balances into the last period.
+    fn create_repayment_period_for_early_repaid(
+        &mut self,
+        total_paid_principal: &Money,
+        total_paid_interest: &Money,
+        is_re_aged: bool,
+    ) {
+        let last = self.periods.len() - 1;
+        let pi = total_paid_interest.minus(&self.periods[last].paid_interest);
+        let pp = total_paid_principal.minus(&self.periods[last].paid_principal);
+        self.periods[last].paid_interest = self.periods[last].paid_interest.plus(&pi);
+        self.periods[last].paid_principal = self.periods[last].paid_principal.plus(&pp);
+        self.periods[last].emi = self.total_paid_amount(last);
+        if is_re_aged {
+            self.periods[last].re_aged = true;
+        }
+        self.periods[last].re_aged_early_repayment_holder = true;
+        self.calculate_rate_factor_for_repayment_period(last);
+    }
+
+    fn is_collapsable_stub(&self, i: usize) -> bool {
+        self.periods[i].re_aged_early_repayment_holder
+            && self.periods[i].emi.is_zero()
+            && self.due_principal(i).is_zero()
+            && self.due_interest(i).is_zero()
+    }
+
+    /// `collapseIntermediateStubPeriods` — merge adjacent collapsable re-age stub periods.
+    fn collapse_intermediate_stub_periods(&mut self) {
+        if self.periods.len() <= 1 {
+            return;
+        }
+        let mut i = 0;
+        while i < self.periods.len() {
+            if self.is_collapsable_stub(i) {
+                while i + 1 < self.periods.len() && self.is_collapsable_stub(i + 1) {
+                    let removed_due = self.periods.remove(i + 1).due;
+                    self.periods[i].due = removed_due;
+                    if let Some(last) = self.periods[i].interest_periods.last_mut() {
+                        last.due = removed_due;
+                    }
+                    self.calculate_rate_factor_for_repayment_period(i);
+                }
+            }
+            i += 1;
+        }
+    }
+
+    /// `updateModelForReageEqualAmortization` — append `n` new re-aged repayment periods starting at `start_date`,
+    /// stepping by `frequency_months`.
+    fn update_model_for_reage(&mut self, start_date: Date, n: usize, frequency_months: i64) {
+        let mut to_date = start_date;
+        for _ in 0..n {
+            let last = self.periods.len() - 1;
+            let from = self.periods[last].due;
+            let (total_disbursed, total_capitalized) = (
+                self.periods[last].total_disbursed_amount.clone(),
+                self.periods[last].total_capitalized_income_amount.clone(),
+            );
+            let zero = self.zero();
+            self.periods.push(RepaymentPeriod {
+                from,
+                due: to_date,
+                interest_periods: vec![InterestPeriod {
+                    from,
+                    due: to_date,
+                    rate_factor: BigDecimal::from(0),
+                    rate_factor_till_period_due_date: BigDecimal::from(0),
+                    credited_principal: zero.clone(),
+                    credited_interest: zero.clone(),
+                    disbursement_amount: zero.clone(),
+                    balance_correction_amount: zero.clone(),
+                    capitalized_income_principal: zero.clone(),
+                    outstanding_loan_balance: zero.clone(),
+                    is_paused: false,
+                }],
+                emi: zero.clone(),
+                original_emi: zero.clone(),
+                paid_principal: zero.clone(),
+                paid_interest: zero.clone(),
+                future_unrecognized_interest: zero.clone(),
+                total_disbursed_amount: total_disbursed,
+                total_capitalized_income_amount: total_capitalized,
+                interest_payment_grace: false,
+                is_interest_moved_upward: false,
+                is_interest_moved_downward: false,
+                re_aged: true,
+                re_aged_early_repayment_holder: false,
+                credited_principal_moved_due_reage: zero.clone(),
+                credited_interest_moved_due_reage: zero.clone(),
+                fixed_interest: zero,
+            });
+            to_date = add_months(to_date, frequency_months);
+        }
+    }
+
+    /// `updateEMIForReAgeEqualAmortization` — distribute the re-aged principal + interest equally over the last `n`
+    /// (re-aged) periods, recording each period's `fixed_interest` and EMI.
+    fn update_emi_for_reage(&mut self, n: usize, principal: &Money, interest: &Money) {
+        use crate::equal_amortization::{
+            calculate_adjusted_equal_amortization_values, calculate_equal_amortization_values,
+        };
+        let installments = i64::try_from(n).unwrap_or(0);
+        let interest_eav = calculate_equal_amortization_values(interest, installments);
+        let total = principal.plus(interest);
+        let principal_eav = calculate_adjusted_equal_amortization_values(
+            principal,
+            &total,
+            &interest_eav.value,
+            installments,
+        );
+        let emi_eav = match principal_eav.try_add(&interest_eav) {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        let base = self.periods.len() - n;
+        for j in 0..n {
+            let idx = base + j;
+            let ji = i64::try_from(j).unwrap_or(0);
+            self.periods[idx].fixed_interest = interest_eav.calculate_value(ji);
+            let emi = emi_eav.calculate_value(ji);
+            self.periods[idx].emi = emi.clone();
+            self.periods[idx].original_emi = emi;
+        }
+    }
+
+    /// `reAgeEqualAmortization` — re-age the loan: accelerate the maturity to `transaction_date`, close the open
+    /// periods (keeping paid amounts), then append `number_of_installments` new equal-amortization periods from
+    /// `re_age_start_date` carrying the re-aged outstanding principal + interest.
+    pub fn re_age_equal_amortization(
+        &mut self,
+        transaction_date: Date,
+        re_age_start_date: Date,
+        number_of_installments: usize,
+        frequency_months: i64,
+        full_interest: bool,
+    ) {
+        let original_maturity = self.periods.last().map(|p| p.due);
+        let amount_target = if full_interest {
+            original_maturity
+        } else {
+            Some(transaction_date)
+        };
+        let (reage_principal, reage_interest) = match amount_target {
+            Some(t) => self.get_outstanding_amounts_till_date(t),
+            None => (self.zero(), self.zero()),
+        };
+        let paid = self.calculate_paid_balances_after_date(transaction_date);
+        let mut future_credited = self.zero();
+        for i in 0..self.periods.len() {
+            if self.periods[i].from >= transaction_date && self.periods[i].due > transaction_date {
+                future_credited = future_credited.plus(&self.credited_principal(i));
+            }
+        }
+
+        self.accelerate_maturity_date_to(transaction_date);
+        let zero = self.zero();
+        self.add_credit(transaction_date, &future_credited, &zero);
+
+        // Close all open repayment periods while keeping paid amounts.
+        for i in 0..self.periods.len() {
+            let oi = self.outstanding_interest(i);
+            let ci = self.credited_interest(i);
+            let neg = self.zero().minus(&money_min(&oi, &ci));
+            if let Some(last) = self.periods[i].interest_periods.last_mut() {
+                last.credited_interest = last.credited_interest.plus(&neg);
+            }
+            self.periods[i].emi = self.total_paid_amount(i);
+            self.periods[i].credited_principal_moved_due_reage = self.credited_principal(i);
+            self.periods[i].credited_interest_moved_due_reage = self.credited_interest(i);
+            self.periods[i].is_interest_moved_downward = true;
+        }
+
+        if original_maturity.is_some_and(|om| om >= transaction_date) {
+            self.create_repayment_period_for_early_repaid(&paid.0, &paid.1, true);
+        }
+
+        self.collapse_intermediate_stub_periods();
+        self.update_model_for_reage(re_age_start_date, number_of_installments, frequency_months);
+        self.update_emi_for_reage(number_of_installments, &reage_principal, &reage_interest);
+        self.calculate_outstanding_balance();
+
+        let zero_from = match original_maturity {
+            Some(om) if om < transaction_date => om,
+            _ => transaction_date,
+        };
+        self.interest_rates.push((zero_from, BigDecimal::from(0)));
+        self.calculate_last_unpaid_emi();
+    }
+}
+
+/// `getRepaymentPeriodDate(MONTHS, n, date)` — add `n` months, clamping the day to the target month's length. This is
+/// the simple frequency add used by re-aging (NOT the off-cadence `generateNextRepaymentDate`).
+fn add_months(date: Date, n: i64) -> Date {
+    let total = i64::from(date.year()) * 12 + i64::from(u8::from(date.month())) - 1 + n;
+    let year = i32::try_from(total.div_euclid(12)).unwrap_or(date.year());
+    let month_idx = u8::try_from(total.rem_euclid(12) + 1).unwrap_or(1);
+    let month = time::Month::try_from(month_idx).unwrap_or(time::Month::January);
+    let mut day = date.day();
+    while day > 1 {
+        if let Ok(d) = Date::from_calendar_date(year, month, day) {
+            return d;
+        }
+        day -= 1;
+    }
+    Date::from_calendar_date(year, month, 1).unwrap_or(date)
 }
 
 /// Build a fresh declining-balance model for DAYS_360 / DAYS_30 and apply the initial disbursement — equivalent to
@@ -1519,6 +1778,9 @@ pub fn new_declining_balance_with_day_count(
             is_interest_moved_upward: false,
             is_interest_moved_downward: false,
             re_aged: false,
+            re_aged_early_repayment_holder: false,
+            credited_principal_moved_due_reage: zero.clone(),
+            credited_interest_moved_due_reage: zero.clone(),
             fixed_interest: zero.clone(),
         })
         .collect();

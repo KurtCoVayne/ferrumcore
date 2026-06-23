@@ -1940,3 +1940,46 @@ fn outstanding_amounts_till_date() {
         "outstanding interest after period 0"
     );
 }
+
+/// Re-age invariant (the assertion in `test_transactionInMiddleOfPeriod_EQUAL_AMORTIZATION_FULL_INTEREST_…_noInterestRecalc`):
+/// re-aging a loan with no payments must NOT change the total outstanding (principal + interest) — it only redistributes
+/// it across the new equal-amortization installments. Verified here on a fresh 100 @ 7% DAYS_360/30 loan re-aged on
+/// Apr 15 into 6 installments from Apr 20. Exercises the full re-age subsystem (accelerate maturity, close periods,
+/// append equal-amortization re-aged periods carrying the outstanding) + getOutstandingAmountsTillDate. (The Java golden
+/// uses DAYS_365/15.678%, which the recalc day-count enum does not model; the asserted invariant is day-count-agnostic.)
+#[test]
+fn reage_equal_amortization_preserves_outstanding() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    let maturity_before = model.periods.last().unwrap().due;
+    let (p_before, i_before) = model.get_outstanding_amounts_till_date(maturity_before);
+
+    model.re_age_equal_amortization(
+        d(2024, Month::April, 15),
+        d(2024, Month::April, 20),
+        6,
+        1,
+        true,
+    );
+
+    let maturity_after = model.periods.last().unwrap().due;
+    let (p_after, i_after) = model.get_outstanding_amounts_till_date(maturity_after);
+
+    assert_eq!(
+        p_after.to_plain_string(),
+        p_before.to_plain_string(),
+        "outstanding principal unchanged by re-age"
+    );
+    assert_eq!(
+        i_after.to_plain_string(),
+        i_before.to_plain_string(),
+        "outstanding interest unchanged by re-age"
+    );
+}
