@@ -298,3 +298,82 @@ pub fn generate_declining_balance(
 
     Model { periods }
 }
+
+/// `generate` + `addDisbursement` for the **flat** interest method (single fresh disbursement): interest accrues on the
+/// *original* disbursed amount each period (`baseAmount = total disbursed`), the EMI is `(principal + Σinterest) / n`,
+/// and the last period carries the rounding remainder. Mirrors
+/// `calculateEMIOnActualModelWithFlatInterestMethod` for the fresh case.
+#[must_use]
+pub fn generate_flat(
+    period_dates: &[(Date, Date)],
+    disbursed: &BigDecimal,
+    nominal_rate_pct: &BigDecimal,
+    day_count: DayCountKind,
+    scale: i64,
+    mode: bigdecimal::RoundingMode,
+) -> Model {
+    let mc = Mc::new(12, mode);
+    let money = |v: &BigDecimal| Money::of(scale, mode, v);
+    let rate = mc.div(nominal_rate_pct, &BigDecimal::from(100));
+    let n = period_dates.len();
+
+    let rate_factors: Vec<BigDecimal> = period_dates
+        .iter()
+        .map(|(from, due)| period_rate_factor(&mc, &rate, *from, *due, day_count))
+        .collect();
+    // Flat interest: on the original disbursed amount each period.
+    let interests: Vec<Money> = rate_factors
+        .iter()
+        .map(|rf| money(&(disbursed * rf)))
+        .collect();
+    let total = interests
+        .iter()
+        .fold(money(disbursed), |acc, i| acc.plus(i));
+    let period_emi = if n == 0 {
+        money(&BigDecimal::from(0))
+    } else {
+        money(&mc.div(total.amount(), &BigDecimal::from(n as i64)))
+    };
+    let remainder = total.minus(&period_emi.multiplied_by(&BigDecimal::from(n as i64)));
+
+    let mut periods = Vec::with_capacity(n);
+    let mut outstanding = money(disbursed);
+    for (i, (from, due)) in period_dates.iter().enumerate() {
+        let interest = interests[i].clone();
+        let last = i == n - 1;
+        let emi_i = if last {
+            period_emi.plus(&remainder)
+        } else {
+            period_emi.clone()
+        };
+        let principal = emi_i.minus(&interest);
+        outstanding = outstanding.minus(&principal);
+
+        let mut interest_periods = Vec::new();
+        if i == 0 {
+            interest_periods.push(InterestPeriod {
+                from: *from,
+                due: *from,
+                rate_factor: BigDecimal::from(0),
+                calculated_due_interest: BigDecimal::from(0),
+            });
+        }
+        interest_periods.push(InterestPeriod {
+            from: *from,
+            due: *due,
+            rate_factor: rate_factors[i].clone(),
+            calculated_due_interest: disbursed * &rate_factors[i],
+        });
+
+        periods.push(RepaymentPeriod {
+            from: *from,
+            due: *due,
+            interest_periods,
+            emi: emi_i,
+            due_principal: principal,
+            due_interest: interest,
+            outstanding_balance: outstanding.clone(),
+        });
+    }
+    Model { periods }
+}

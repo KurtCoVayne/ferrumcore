@@ -5,7 +5,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code
 
 use bigdecimal::{BigDecimal, RoundingMode};
-use fc_loan_emi::{DayCountKind, generate_declining_balance};
+use fc_loan_emi::{DayCountKind, generate_declining_balance, generate_flat};
 use std::str::FromStr;
 use time::{Date, Month};
 
@@ -266,6 +266,32 @@ fn disbursed_100_360_15_days() {
     check_period(&model, 3, "16.90", "0.20", "16.70", "33.59");
     check_period(&model, 4, "16.90", "0.13", "16.77", "16.82");
     check_period(&model, 5, "16.89", "0.07", "16.82", "0.00");
+}
+
+/// `testFlatDaily_1_Month_360_30` (first disbursement block): 750 @ 12% FLAT, DAYS_360/DAYS_30, 4 monthly periods →
+/// flat interest 7.50/period on the original principal, EMI 195.00, equal principal 187.50.
+#[test]
+fn flat_360_30_monthly() {
+    let periods: Vec<(Date, Date)> = (0..4)
+        .map(|i| {
+            (
+                first_of(2024, month_of(1 + i)),
+                first_of(2024, month_of(2 + i)),
+            )
+        })
+        .collect();
+    let model = generate_flat(
+        &periods,
+        &bd("750"),
+        &bd("12.0"),
+        DayCountKind::Days360Days30 { repay_every: 1 },
+        2,
+        RoundingMode::HalfEven,
+    );
+    check_period(&model, 0, "195.00", "7.50", "187.50", "562.50");
+    check_period(&model, 1, "195.00", "7.50", "187.50", "375.00");
+    check_period(&model, 2, "195.00", "7.50", "187.50", "187.50");
+    check_period(&model, 3, "195.00", "7.50", "187.50", "0.00");
 }
 
 /// Six monthly periods from 2024-01-01.
