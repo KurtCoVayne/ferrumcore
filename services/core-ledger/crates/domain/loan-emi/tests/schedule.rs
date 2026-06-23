@@ -131,6 +131,62 @@ fn repayment_schedule_360_30_repay_every_2_months() {
     check_period(&model, 5, "622.07", "20.06", "602.01", "0.00");
 }
 
+/// `test_disbursedAmt100_dayInYears360_daysInMonth30_repayEvery1Month` (interest-period granularity, HALF_EVEN):
+/// 100 @ 9.4822%, 360/30, six monthly periods from 2024-01-01. Asserts the per-interest-period rate factor and
+/// `getCalculatedDueInterest`, including the zero-length disbursement stub (rp0 interest period 0).
+#[test]
+fn disbursed_100_360_30_interest_period_granularity() {
+    let model = generate_declining_balance(
+        &monthly_periods_2024_six(),
+        &bd("100"),
+        &bd("9.4822"),
+        DayCountKind::Days360Days30 { repay_every: 1 },
+        2,
+        RoundingMode::HalfEven,
+    );
+    // rp0 has two interest periods: the disbursement stub (rate factor 0) then the real one.
+    let rp0 = &model.periods[0];
+    assert_eq!(
+        rp0.interest_periods.len(),
+        2,
+        "rp0 has stub + real interest period"
+    );
+    assert_eq!(rp0.interest_periods[0].rate_factor.to_string(), "0");
+    assert_eq!(
+        fc_money::decimal::to_plain_string(&rp0.interest_periods[0].calculated_due_interest),
+        "0"
+    );
+    assert_eq!(
+        fc_money::decimal::to_plain_string(&rp0.interest_periods[1].rate_factor),
+        "0.007901833333"
+    );
+    assert_eq!(
+        fc_money::decimal::to_plain_string(&rp0.interest_periods[1].calculated_due_interest),
+        "0.790183333301"
+    );
+    // repayment-period level: emi 17.13, dueInterest 0.79, duePrincipal 16.34, outstanding 83.66.
+    check_period(&model, 0, "17.13", "0.79", "16.34", "83.66");
+    check_period(&model, 1, "17.13", "0.66", "16.47", "67.19");
+    check_period(&model, 5, "17.13", "0.13", "17.00", "0.00");
+    // later periods have a single interest period.
+    assert_eq!(model.periods[1].interest_periods.len(), 1);
+}
+
+/// Six monthly periods from 2024-01-01.
+fn monthly_periods_2024_six() -> Vec<(Date, Date)> {
+    (0..6)
+        .map(|i| {
+            (
+                first_of(2024, month_of(1 + i)),
+                first_of(2024, month_of(2 + i)),
+            )
+        })
+        .collect()
+}
+fn month_of(n: u8) -> Month {
+    Month::try_from(n).unwrap()
+}
+
 /// 12 monthly periods from 2024-01-01.
 fn monthly_periods_2024() -> Vec<(Date, Date)> {
     let months = [

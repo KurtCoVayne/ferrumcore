@@ -21,11 +21,26 @@ use fc_money::Money;
 use fc_money::decimal;
 use time::{Date, Month};
 
+/// One interest period within a repayment period (`InterestPeriod`). A disbursement on a period's start date produces a
+/// zero-length leading stub (rate factor 0).
+#[derive(Clone, Debug)]
+pub struct InterestPeriod {
+    pub from: Date,
+    pub due: Date,
+    /// `getRateFactor()` — the period rate factor, fixed to 12 decimals (zero for the disbursement stub).
+    pub rate_factor: BigDecimal,
+    /// `getCalculatedDueInterest()` — the interest accrued over this interest period (full precision, not currency
+    /// scale).
+    pub calculated_due_interest: BigDecimal,
+}
+
 /// One repayment period of the schedule model (the amounts at currency scale).
 #[derive(Clone, Debug)]
 pub struct RepaymentPeriod {
     pub from: Date,
     pub due: Date,
+    /// The interest periods making up this repayment period (`getInterestPeriods`).
+    pub interest_periods: Vec<InterestPeriod>,
     /// The installment value (`getEmi`).
     pub emi: Money,
     pub due_principal: Money,
@@ -216,6 +231,25 @@ pub fn generate_declining_balance(
             &BigDecimal::from(0),
         );
         let interest = money(&calc_interest);
+
+        // Interest periods: the first repayment period carries a zero-length disbursement stub at its start (the
+        // disbursement lands on the loan start date), then the real interest period; later periods have a single one.
+        let mut interest_periods = Vec::new();
+        if i == 0 {
+            interest_periods.push(InterestPeriod {
+                from: *from,
+                due: *from,
+                rate_factor: BigDecimal::from(0),
+                calculated_due_interest: BigDecimal::from(0),
+            });
+        }
+        interest_periods.push(InterestPeriod {
+            from: *from,
+            due: *due,
+            rate_factor: rate_factors[i].clone(),
+            calculated_due_interest: calc_interest,
+        });
+
         let last = i == n - 1;
         let (principal, emi_i) = if last {
             (outstanding.clone(), outstanding.plus(&interest))
@@ -226,6 +260,7 @@ pub fn generate_declining_balance(
         periods.push(RepaymentPeriod {
             from: *from,
             due: *due,
+            interest_periods,
             emi: emi_i,
             due_principal: principal,
             due_interest: interest,
