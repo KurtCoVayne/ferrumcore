@@ -1723,3 +1723,67 @@ fn actual_actual_early_payment() {
     check_rp(&model, 4, "857.71", "14.33", "843.38", "850.05");
     check_rp(&model, 5, "857.01", "6.96", "850.05", "0.00");
 }
+
+/// `test_S4_full_chargeback_in_middle_of_instalment_before_maturity_date`: after repaying periods 0-1, a full chargeback
+/// (17.01) MID-period on Mar 15 — the balance correction lands on period 2's Mar1-Mar15 interest period and the
+/// credited principal on its Mar15-Apr1 interest period (so period 2 splits into two), due principal 33.57.
+#[test]
+fn chargeback_mid_instalment() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1);
+    let mar1 = d(2024, Month::March, 1);
+    let mar15 = d(2024, Month::March, 15);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    model.pay_principal(jan1, feb1, feb1, &m("16.43"));
+    model.pay_interest(jan1, feb1, feb1, &m("0.58"));
+    model.pay_principal(feb1, mar1, mar1, &m("16.52"));
+    model.pay_interest(feb1, mar1, mar1, &m("0.49"));
+
+    model.credit_principal(mar15, &m("17.01"));
+
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.487491666639",
+        "0.49",
+        "16.52",
+        "67.05",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.002634408602",
+        "0.176637096765",
+        "0.45",
+        "33.57",
+        "50.49",
+    );
+    check_ip(
+        &model,
+        2,
+        1,
+        "17.01",
+        "0.003198924731",
+        "0.268901612888",
+        "0.45",
+        "33.57",
+        "50.49",
+    );
+    check_rp(&model, 3, "17.01", "0.29", "16.72", "33.77");
+    check_rp(&model, 4, "17.01", "0.20", "16.81", "16.96");
+    check_rp(&model, 5, "17.06", "0.10", "16.96", "0.00");
+}
