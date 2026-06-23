@@ -294,6 +294,31 @@ fn flat_360_30_monthly() {
     check_period(&model, 3, "195.00", "7.50", "187.50", "0.00");
 }
 
+/// `test_sameAsRepayment_month_repay_every_1_periods_3` (first disbursement block): 1000 @ 12%, monthly,
+/// SAME_AS_REPAYMENT_PERIOD, FLAT method, 3 periods → rate factor 12%/12 = 0.01, flat interest 10/period, EMI 343.33.
+#[test]
+fn same_as_repayment_month_flat() {
+    let periods: Vec<(Date, Date)> = (0..3)
+        .map(|i| {
+            (
+                first_of(2024, month_of(1 + i)),
+                first_of(2024, month_of(2 + i)),
+            )
+        })
+        .collect();
+    let model = generate_flat(
+        &periods,
+        &bd("1000"),
+        &bd("12.0"),
+        DayCountKind::SameAsRepaymentMonths { repay_every: 1 },
+        2,
+        RoundingMode::HalfEven,
+    );
+    check_period(&model, 0, "343.33", "10.00", "333.33", "666.67");
+    check_period(&model, 1, "343.33", "10.00", "333.33", "333.34");
+    check_period(&model, 2, "343.34", "10.00", "333.34", "0.00");
+}
+
 /// Six monthly periods from 2024-01-01.
 fn monthly_periods_2024_six() -> Vec<(Date, Date)> {
     (0..6)

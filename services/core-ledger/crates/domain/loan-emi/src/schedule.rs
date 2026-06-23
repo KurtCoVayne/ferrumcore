@@ -60,6 +60,8 @@ pub enum DayCountKind {
     /// ACTUAL / ACTUAL. The year-boundary split is at **Dec 31** normally, or at **Jan 1** of the next year when
     /// `recognition_on_disbursement` is set (`isInterestRecognitionOnDisbursementDate`).
     ActualActual { recognition_on_disbursement: bool },
+    /// SAME_AS_REPAYMENT_PERIOD, monthly: `rate × repayEvery / 12` (independent of actual day counts).
+    SameAsRepaymentMonths { repay_every: i64 },
 }
 
 /// `PeriodDueDetails` — the due amounts of one repayment period (`getDueAmounts`).
@@ -180,6 +182,15 @@ fn period_rate_factor(
                 &one,
             )
         }
+        DayCountKind::SameAsRepaymentMonths { repay_every } => rate_factor_by_repayment_period(
+            mc,
+            rate,
+            &one,
+            &BigDecimal::from(repay_every),
+            &BigDecimal::from(12),
+            &one,
+            &one,
+        ),
         DayCountKind::ActualActual {
             recognition_on_disbursement,
         } => {
