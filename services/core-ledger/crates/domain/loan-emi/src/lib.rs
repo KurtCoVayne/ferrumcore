@@ -9,7 +9,9 @@
 //! piece verified against the original's VERIFIED tests (`ProgressiveEMICalculatorTest`, run on JDK 21 to capture the
 //! golden behavior).
 //!
-//! **Landed:** [`equal_amortization`] — the equal-amortization split used by re-age / re-amortize.
+//! **Landed:** [`equal_amortization`] — the equal-amortization split used by re-age / re-amortize; [`rate_factor`] —
+//! the significant-figure rate-factor (`rateFactorByRepaymentEveryMonth`) and annuity `fnValue` primitives
+//! (golden-verified against `ProgressiveEMICalculatorTest`, reusing the proven `fc-loan-schedule::MathCtx`).
 //!
 //! **In progress (later slices):** the interest-schedule model (index-based redesign of the original's
 //! `previous`-linked mutable graph), schedule-model generation + EMI, `getDueAmounts`, `payPrincipal` / `payInterest`,
@@ -17,8 +19,12 @@
 #![forbid(unsafe_code)]
 
 pub mod equal_amortization;
+pub mod rate_factor;
 
 pub use equal_amortization::{
     EqualAmortizationValues, calculate_adjusted_equal_amortization_values,
     calculate_equal_amortization_values,
+};
+pub use rate_factor::{
+    fn_value, rate_factor_by_repayment_every_month, rate_factor_by_repayment_period,
 };

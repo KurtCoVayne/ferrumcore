@@ -257,6 +257,7 @@ name = "fc-loan-emi"
 version = "0.0.0"
 dependencies = [
  "bigdecimal",
+ "fc-loan-schedule",
  "fc-money",
  "time",
 ]
