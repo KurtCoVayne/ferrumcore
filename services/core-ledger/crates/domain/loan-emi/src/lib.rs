@@ -28,7 +28,7 @@ pub mod schedule;
 
 pub use math::Mc;
 pub use schedule::{
-    DayCount, Model, PeriodDueDetails, RepaymentPeriod, generate_declining_balance,
+    DayCountKind, Model, PeriodDueDetails, RepaymentPeriod, generate_declining_balance,
 };
 
 pub use equal_amortization::{

@@ -5,7 +5,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code
 
 use bigdecimal::{BigDecimal, RoundingMode};
-use fc_loan_emi::{DayCount, generate_declining_balance};
+use fc_loan_emi::{DayCountKind, generate_declining_balance};
 use std::str::FromStr;
 use time::{Date, Month};
 
@@ -63,12 +63,7 @@ fn repayment_schedule_360_30_month_end() {
         &periods,
         &bd("2450"),
         &bd("9.99"),
-        DayCount {
-            days_in_year: 360,
-            days_in_month: 30,
-            days_in_period: 30,
-            repay_every: 1,
-        },
+        DayCountKind::Days360Days30 { repay_every: 1 },
         2,
         RoundingMode::HalfUp,
     );
@@ -96,12 +91,7 @@ fn repayment_schedule_360_30_repay_every_2_months() {
         &periods,
         &bd("3333"),
         &bd("19.99"),
-        DayCount {
-            days_in_year: 360,
-            days_in_month: 30,
-            days_in_period: 60,
-            repay_every: 2,
-        },
+        DayCountKind::Days360Days30 { repay_every: 2 },
         2,
         RoundingMode::HalfUp,
     );
@@ -140,13 +130,37 @@ fn monthly_periods_2024() -> Vec<(Date, Date)> {
         .collect()
 }
 
-fn day_count() -> DayCount {
-    DayCount {
-        days_in_year: 360,
-        days_in_month: 30,
-        days_in_period: 30,
-        repay_every: 1,
-    }
+fn day_count() -> DayCountKind {
+    DayCountKind::Days360Days30 { repay_every: 1 }
+}
+
+/// `test_actual_actual_repayment_schedule_across_multiple_years` (generation block, before the payment): 5000 @ 9.99%
+/// nominal, ACTUAL/ACTUAL, six monthly periods crossing the 2023→2024 boundary, HALF_UP. Exact per-period golden,
+/// exercising the year-boundary partial-period split.
+#[test]
+fn repayment_schedule_actual_actual_across_years() {
+    let periods = [
+        (d(2023, Month::November, 13), d(2023, Month::December, 13)),
+        (d(2023, Month::December, 13), d(2024, Month::January, 13)),
+        (d(2024, Month::January, 13), d(2024, Month::February, 13)),
+        (d(2024, Month::February, 13), d(2024, Month::March, 13)),
+        (d(2024, Month::March, 13), d(2024, Month::April, 13)),
+        (d(2024, Month::April, 13), d(2024, Month::May, 13)),
+    ];
+    let model = generate_declining_balance(
+        &periods,
+        &bd("5000"),
+        &bd("9.99"),
+        DayCountKind::ActualActual,
+        2,
+        RoundingMode::HalfUp,
+    );
+    check_period(&model, 0, "857.71", "41.05", "816.66", "4183.34");
+    check_period(&model, 1, "857.71", "35.45", "822.26", "3361.08");
+    check_period(&model, 2, "857.71", "28.44", "829.27", "2531.81");
+    check_period(&model, 3, "857.71", "20.04", "837.67", "1694.14");
+    check_period(&model, 4, "857.71", "14.33", "843.38", "850.76");
+    check_period(&model, 5, "857.73", "6.97", "850.76", "0.00");
 }
 
 #[test]
