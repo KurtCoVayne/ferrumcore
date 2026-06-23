@@ -350,6 +350,58 @@ fn flat_actual_actual_monthly() {
     check_period(&model, 3, "181.95", "6.89", "175.06", "0.00");
 }
 
+/// `testFlatDaily_1_week_Actual_Actual` (first disbursement block): 600 @ 12% FLAT, ACTUAL/ACTUAL, 4 weekly periods
+/// from 2024-01-01 — flat interest 1.38/week on the original principal, EMI 151.38, equal principal 150.00.
+#[test]
+fn flat_actual_actual_weekly() {
+    let periods = [
+        (d(2024, Month::January, 1), d(2024, Month::January, 8)),
+        (d(2024, Month::January, 8), d(2024, Month::January, 15)),
+        (d(2024, Month::January, 15), d(2024, Month::January, 22)),
+        (d(2024, Month::January, 22), d(2024, Month::January, 29)),
+    ];
+    let model = generate_flat(
+        &periods,
+        &bd("600"),
+        &bd("12.0"),
+        DayCountKind::ActualActual {
+            recognition_on_disbursement: false,
+        },
+        2,
+        RoundingMode::HalfEven,
+    );
+    check_period(&model, 0, "151.38", "1.38", "150.00", "450.00");
+    check_period(&model, 1, "151.38", "1.38", "150.00", "300.00");
+    check_period(&model, 2, "151.38", "1.38", "150.00", "150.00");
+    check_period(&model, 3, "151.38", "1.38", "150.00", "0.00");
+}
+
+/// `testFlatDaily_30_Days_Actual_Actual` (first disbursement block): 400 @ 12% FLAT, ACTUAL/ACTUAL, four 30-day periods
+/// from 2024-01-01 — flat interest 3.93/period on the original principal, EMI 103.93, equal principal 100.00.
+#[test]
+fn flat_actual_actual_30_days() {
+    let periods = [
+        (d(2024, Month::January, 1), d(2024, Month::January, 31)),
+        (d(2024, Month::January, 31), d(2024, Month::March, 1)),
+        (d(2024, Month::March, 1), d(2024, Month::March, 31)),
+        (d(2024, Month::March, 31), d(2024, Month::April, 30)),
+    ];
+    let model = generate_flat(
+        &periods,
+        &bd("400"),
+        &bd("12.0"),
+        DayCountKind::ActualActual {
+            recognition_on_disbursement: false,
+        },
+        2,
+        RoundingMode::HalfEven,
+    );
+    check_period(&model, 0, "103.93", "3.93", "100.00", "300.00");
+    check_period(&model, 1, "103.93", "3.93", "100.00", "200.00");
+    check_period(&model, 2, "103.93", "3.93", "100.00", "100.00");
+    check_period(&model, 3, "103.93", "3.93", "100.00", "0.00");
+}
+
 /// `test_sameAsRepayment_month_repay_every_1_periods_3` (first disbursement block): 1000 @ 12%, monthly,
 /// SAME_AS_REPAYMENT_PERIOD, FLAT method, 3 periods → rate factor 12%/12 = 0.01, flat interest 10/period, EMI 343.33.
 #[test]
