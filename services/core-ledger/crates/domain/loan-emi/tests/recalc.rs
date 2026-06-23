@@ -1848,3 +1848,53 @@ fn chargeback_mid_period_then_get_due_amounts() {
     assert_eq!(due.due_principal.to_plain_string(), "33.35");
     assert_eq!(due.due_interest.to_plain_string(), "0.67");
 }
+
+/// `test_repayment_actual_actual_repayment_schedule_across_multiple_years_overdue`: 5000 @ 9.99% ACTUAL/ACTUAL; period 0
+/// paid early (36.95 interest + 820.76 principal on Dec 10), then periods 1-5 go overdue (due principal added back each
+/// period). Outstanding holds at 4179.24 after period 0; last EMI grows to 925.27. Combines early payment + overdue.
+#[test]
+fn actual_actual_early_payment_then_overdue() {
+    let periods = [
+        (d(2023, Month::November, 13), d(2023, Month::December, 13)),
+        (d(2023, Month::December, 13), d(2024, Month::January, 13)),
+        (d(2024, Month::January, 13), d(2024, Month::February, 13)),
+        (d(2024, Month::February, 13), d(2024, Month::March, 13)),
+        (d(2024, Month::March, 13), d(2024, Month::April, 13)),
+        (d(2024, Month::April, 13), d(2024, Month::May, 13)),
+    ];
+    let mut model = new_declining_balance_with_day_count(
+        &periods,
+        &bd("5000"),
+        &bd("9.99"),
+        DayCount::ActualActual {
+            recognition_on_disbursement: false,
+        },
+        2,
+        RoundingMode::HalfUp,
+    );
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfUp, &bd(s));
+    model.pay_interest(
+        periods[0].0,
+        periods[0].1,
+        d(2023, Month::December, 10),
+        &m("36.95"),
+    );
+    model.pay_principal(
+        periods[0].0,
+        periods[0].1,
+        d(2023, Month::December, 10),
+        &m("820.76"),
+    );
+    for &(from, due) in &periods[1..] {
+        let dp = model.get_due_amounts(from, due, due).unwrap().due_principal;
+        model.add_balance_correction(due, &dp);
+    }
+
+    check_rp(&model, 0, "857.71", "36.95", "820.76", "4179.24");
+    assert!(model.period_fully_paid(0), "period 0 fully paid");
+    check_rp(&model, 1, "857.71", "38.85", "818.86", "4179.24");
+    check_rp(&model, 2, "857.71", "35.36", "822.35", "4179.24");
+    check_rp(&model, 3, "857.71", "33.08", "824.63", "4179.24");
+    check_rp(&model, 4, "857.71", "35.36", "822.35", "4179.24");
+    check_rp(&model, 5, "925.27", "34.22", "891.05", "4179.24");
+}
