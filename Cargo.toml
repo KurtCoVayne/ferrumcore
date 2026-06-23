@@ -11,6 +11,7 @@ members = [
     "shared/fc-contracts",
     "services/core-ledger/crates/domain/loan-lifecycle",
     "services/core-ledger/crates/domain/loan-schedule",
+    "services/core-ledger/crates/domain/loan-allocation",
 ]
 
 [workspace.package]

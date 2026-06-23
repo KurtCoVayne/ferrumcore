@@ -1,0 +1,19 @@
+[package]
+name = "fc-loan-allocation"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Loan payment allocation kernel (C2) — faithful port of the legacy LoanRepaymentScheduleTransactionProcessor family."
+
+[lints]
+workspace = true
+
+[dependencies]
+bigdecimal = { workspace = true }
+time = { workspace = true }
+fc-money = { workspace = true }
+
+[dev-dependencies]
+time = { workspace = true }
+fc-money = { workspace = true }

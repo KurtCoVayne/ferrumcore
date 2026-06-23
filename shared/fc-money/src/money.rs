@@ -49,6 +49,39 @@ impl Money {
         }
     }
 
+    /// A zero amount at `scale`/`mode` (Java `Money.zero(currency)`).
+    #[must_use]
+    pub fn zero(scale: i64, mode: RoundingMode) -> Self {
+        Self::of(scale, mode, &BigDecimal::from(0))
+    }
+
+    /// The underlying normalized amount.
+    #[must_use]
+    pub fn amount(&self) -> &BigDecimal {
+        &self.amount
+    }
+
+    /// `this == 0` (Java `Money.isZero`).
+    #[must_use]
+    pub fn is_zero(&self) -> bool {
+        decimal::compare(&self.amount, &BigDecimal::from(0)) == 0
+    }
+    /// `this > 0` (Java `Money.isGreaterThanZero`).
+    #[must_use]
+    pub fn is_greater_than_zero(&self) -> bool {
+        decimal::compare(&self.amount, &BigDecimal::from(0)) > 0
+    }
+    /// `this > other` (Java `Money.isGreaterThan`).
+    #[must_use]
+    pub fn is_greater_than(&self, other: &Money) -> bool {
+        decimal::compare(&self.amount, &other.amount) > 0
+    }
+    /// `this >= other` (Java `Money.isGreaterThanOrEqualTo`).
+    #[must_use]
+    pub fn is_greater_than_or_equal_to(&self, other: &Money) -> bool {
+        decimal::compare(&self.amount, &other.amount) >= 0
+    }
+
     /// The amount as a Java-`toPlainString`-equivalent (no sci-notation; trailing zeros to scale).
     #[must_use]
     pub fn to_plain_string(&self) -> String {
