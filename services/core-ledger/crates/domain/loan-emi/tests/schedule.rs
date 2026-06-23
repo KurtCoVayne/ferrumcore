@@ -75,6 +75,34 @@ fn repayment_schedule_360_30_month_end() {
     check_period(&model, 5, "420.34", "3.47", "416.87", "0.00");
 }
 
+/// `test_360_30_repayment_schedule_disbursement_near_month_end`: 10000 @ 45% nominal, DAYS_360/DAYS_30, six
+/// near-month-end periods, HALF_UP. Exact per-period golden.
+#[test]
+fn repayment_schedule_360_30_near_month_end() {
+    let periods = [
+        (d(2023, Month::October, 30), d(2023, Month::November, 30)),
+        (d(2023, Month::November, 30), d(2023, Month::December, 30)),
+        (d(2023, Month::December, 30), d(2024, Month::January, 30)),
+        (d(2024, Month::January, 30), d(2024, Month::February, 29)),
+        (d(2024, Month::February, 29), d(2024, Month::March, 30)),
+        (d(2024, Month::March, 30), d(2024, Month::April, 30)),
+    ];
+    let model = generate_declining_balance(
+        &periods,
+        &bd("10000"),
+        &bd("45.0"),
+        DayCountKind::Days360Days30 { repay_every: 1 },
+        2,
+        RoundingMode::HalfUp,
+    );
+    check_period(&model, 0, "1892.12", "375.00", "1517.12", "8482.88");
+    check_period(&model, 1, "1892.12", "318.11", "1574.01", "6908.87");
+    check_period(&model, 2, "1892.12", "259.08", "1633.04", "5275.83");
+    check_period(&model, 3, "1892.12", "197.84", "1694.28", "3581.55");
+    check_period(&model, 4, "1892.12", "134.31", "1757.81", "1823.74");
+    check_period(&model, 5, "1892.13", "68.39", "1823.74", "0.00");
+}
+
 /// `test_360_30_repayment_schedule_disbursement_repay_every_2_months`: 3333 @ 19.99% nominal, DAYS_360/DAYS_30,
 /// repay every 2 months, six periods, HALF_UP. Exact per-period golden.
 #[test]
@@ -161,6 +189,34 @@ fn repayment_schedule_actual_actual_across_years() {
     check_period(&model, 3, "857.71", "20.04", "837.67", "1694.14");
     check_period(&model, 4, "857.71", "14.33", "843.38", "850.76");
     check_period(&model, 5, "857.73", "6.97", "850.76", "0.00");
+}
+
+/// `test_actual_actual_repayment_schedule_disbursement_month_end` (generation block): 245000 @ 45% nominal,
+/// ACTUAL/ACTUAL, six month-end periods crossing 2023→2024, HALF_UP. Exact per-period golden.
+#[test]
+fn repayment_schedule_actual_actual_month_end() {
+    let periods = [
+        (d(2023, Month::October, 31), d(2023, Month::November, 30)),
+        (d(2023, Month::November, 30), d(2023, Month::December, 31)),
+        (d(2023, Month::December, 31), d(2024, Month::January, 31)),
+        (d(2024, Month::January, 31), d(2024, Month::February, 29)),
+        (d(2024, Month::February, 29), d(2024, Month::March, 31)),
+        (d(2024, Month::March, 31), d(2024, Month::April, 30)),
+    ];
+    let model = generate_declining_balance(
+        &periods,
+        &bd("245000"),
+        &bd("45.0"),
+        DayCountKind::ActualActual,
+        2,
+        RoundingMode::HalfUp,
+    );
+    check_period(&model, 0, "46343.27", "9061.64", "37281.63", "207718.37");
+    check_period(&model, 1, "46343.27", "7938.83", "38404.44", "169313.93");
+    check_period(&model, 2, "46343.27", "6453.36", "39889.91", "129424.02");
+    check_period(&model, 3, "46343.27", "4614.71", "41728.56", "87695.46");
+    check_period(&model, 4, "46343.27", "3342.49", "43000.78", "44694.68");
+    check_period(&model, 5, "46343.25", "1648.57", "44694.68", "0.00");
 }
 
 #[test]
