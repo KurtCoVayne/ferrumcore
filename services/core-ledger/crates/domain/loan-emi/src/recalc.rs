@@ -1412,6 +1412,48 @@ impl Model {
             Some(calc.minus(&recalc.credited_interest(rp_idx)))
         }
     }
+
+    /// `calculateRateFactorForScheduleTillDateInclusive` — clip the interest period containing `target` to end at
+    /// `target`, recompute rate factors, then zero the rate factors of any interest period entirely after `target`.
+    fn calculate_rate_factor_for_schedule_till_date_inclusive(&mut self, target: Date) {
+        if let Some(rp_idx) = self.find_period_containing(target)
+            && let Some(k) = self.find_interest_period_in(rp_idx, target)
+        {
+            self.periods[rp_idx].interest_periods[k].due = target;
+        }
+        self.calculate_rate_factor_for_periods();
+        for rp in &mut self.periods {
+            for ip in &mut rp.interest_periods {
+                if target < ip.due {
+                    ip.rate_factor = BigDecimal::from(0);
+                    ip.rate_factor_till_period_due_date = BigDecimal::from(0);
+                }
+            }
+        }
+    }
+
+    /// `getOutstandingAmountsTillDate(targetDate)` — total outstanding principal and interest accrued only up to
+    /// `target` (interest beyond `target` clipped to zero). Returns `(outstanding_principal, outstanding_interest)`.
+    #[must_use]
+    pub fn get_outstanding_amounts_till_date(&self, target: Date) -> (Money, Money) {
+        let mut copy = self.clone();
+        copy.calculate_rate_factor_for_schedule_till_date_inclusive(target);
+        copy.calculate_outstanding_balance();
+        copy.calculate_last_unpaid_emi();
+        let principal = neg_to_zero(
+            &copy
+                .total_due_principal()
+                .minus(&copy.total_paid_principal()),
+            self.scale,
+            self.mode,
+        );
+        let interest = neg_to_zero(
+            &copy.total_due_interest().minus(&copy.total_paid_interest()),
+            self.scale,
+            self.mode,
+        );
+        (principal, interest)
+    }
 }
 
 /// Build a fresh declining-balance model for DAYS_360 / DAYS_30 and apply the initial disbursement — equivalent to

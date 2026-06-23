@@ -1898,3 +1898,45 @@ fn actual_actual_early_payment_then_overdue() {
     check_rp(&model, 4, "857.71", "35.36", "822.35", "4179.24");
     check_rp(&model, 5, "925.27", "34.22", "891.05", "4179.24");
 }
+
+/// `getOutstandingAmountsTillDate` (used by the re-age / EQUAL_AMORTIZATION flow): total outstanding principal and
+/// interest accrued up to a date. On the fresh 100 @ 7% schedule, till maturity = (100.00, 2.05); after fully repaying
+/// period 0 it drops to (83.57, 1.47).
+#[test]
+fn outstanding_amounts_till_date() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1);
+    let jul1 = d(2024, Month::July, 1);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    let (p0, i0) = model.get_outstanding_amounts_till_date(jul1);
+    assert_eq!(
+        p0.to_plain_string(),
+        "100.00",
+        "fresh outstanding principal"
+    );
+    assert_eq!(i0.to_plain_string(), "2.05", "fresh outstanding interest");
+
+    model.pay_principal(jan1, feb1, feb1, &m("16.43"));
+    model.pay_interest(jan1, feb1, feb1, &m("0.58"));
+
+    let (p1, i1) = model.get_outstanding_amounts_till_date(jul1);
+    assert_eq!(
+        p1.to_plain_string(),
+        "83.57",
+        "outstanding principal after period 0"
+    );
+    assert_eq!(
+        i1.to_plain_string(),
+        "1.47",
+        "outstanding interest after period 0"
+    );
+}
