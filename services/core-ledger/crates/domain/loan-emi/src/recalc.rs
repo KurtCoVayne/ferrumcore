@@ -1063,6 +1063,27 @@ impl Model {
             due_interest: recalc.due_interest(rp_idx),
         })
     }
+
+    /// `getPeriodInterestTillDate(from, due, targetDate, includeCreditedInterest, fixedInterestTillDate)` — the
+    /// calculated due interest of the period accrued only up to `target` (used for daily-interest accrual). The
+    /// `fixedInterestTillDate` adjustment is a no-op while `fixedInterest` is zero (the only case the engine supports).
+    #[must_use]
+    pub fn get_period_interest_till_date(
+        &self,
+        from: Date,
+        due: Date,
+        target: Date,
+        include_credited_interest: bool,
+    ) -> Option<Money> {
+        let recalc = self.recalculate_till_date(target);
+        let rp_idx = recalc.find_repayment_period(from, due)?;
+        let calc = recalc.calculated_due_interest(rp_idx);
+        if include_credited_interest {
+            Some(calc)
+        } else {
+            Some(calc.minus(&recalc.credited_interest(rp_idx)))
+        }
+    }
 }
 
 /// Build a fresh declining-balance model for DAYS_360 / DAYS_30 and apply the initial disbursement — equivalent to

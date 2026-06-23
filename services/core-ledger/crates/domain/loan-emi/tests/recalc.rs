@@ -656,3 +656,63 @@ fn chargeback_principal_and_interest() {
         "0.00",
     );
 }
+
+/// `test_dailyInterest_chargeback_disbursedAmt1000_*`: daily interest accrual via `getPeriodInterestTillDate` over a
+/// single-period 1000 @ 7% loan (DAYS_360/30), with an interest period split at Jan 4. Each day's cumulative interest
+/// (and the day's delta) matches the golden; day 31 hits maturity → the full 5.83.
+#[test]
+fn daily_interest_accrual() {
+    let mut model = new_declining_balance(
+        &[(d(2024, Month::January, 1), d(2024, Month::February, 1))],
+        &bd("1000"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1);
+    let jan4 = d(2024, Month::January, 4);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    model.pay_interest(jan1, feb1, jan4, &m("0.56"));
+    model.credit_interest(jan4, &m("0.0"));
+    model.add_balance_correction(jan4, &m("0.0"));
+
+    // (cumulative interest, day-delta) per day offset, from the Java checkDailyInterest assertions.
+    let cum = [
+        "0.19", "0.38", "0.56", "0.75", "0.94", "1.13", "1.32", "1.51", "1.69", "1.88", "2.07",
+        "2.26", "2.45", "2.63", "2.82", "3.01", "3.20", "3.39", "3.58", "3.76", "3.95", "4.14",
+        "4.33", "4.52", "4.70", "4.89", "5.08", "5.27", "5.46", "5.65", "5.83",
+    ];
+    let delta = [
+        "0.19", "0.19", "0.18", "0.19", "0.19", "0.19", "0.19", "0.19", "0.18", "0.19", "0.19",
+        "0.19", "0.19", "0.18", "0.19", "0.19", "0.19", "0.19", "0.19", "0.18", "0.19", "0.19",
+        "0.19", "0.19", "0.18", "0.19", "0.19", "0.19", "0.19", "0.19", "0.18",
+    ];
+    for day in 1..=31u8 {
+        let prev = model
+            .get_period_interest_till_date(
+                jan1,
+                feb1,
+                jan1 + time::Duration::days(i64::from(day) - 1),
+                true,
+            )
+            .unwrap();
+        let curr = model
+            .get_period_interest_till_date(
+                jan1,
+                feb1,
+                jan1 + time::Duration::days(i64::from(day)),
+                true,
+            )
+            .unwrap();
+        let idx = usize::from(day) - 1;
+        assert_eq!(curr.to_plain_string(), cum[idx], "day {day} cumulative");
+        assert_eq!(
+            curr.minus(&prev).to_plain_string(),
+            delta[idx],
+            "day {day} delta"
+        );
+    }
+}
