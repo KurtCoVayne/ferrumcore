@@ -600,6 +600,50 @@ impl Model {
         }
     }
 
+    /// `isEmpty()` — true when no period has a non-zero EMI (i.e. no disbursement has set the schedule yet).
+    fn is_empty(&self) -> bool {
+        self.periods.iter().all(|p| p.emi.is_zero())
+    }
+
+    /// `copyWithoutPaidAmounts` — a clone with paid amounts and balance corrections zeroed (disbursements / credited /
+    /// capitalized retained), used to recompute a clean annuity EMI for the new-model merge.
+    fn copy_without_paid_amounts(&self) -> Model {
+        let mut c = self.clone();
+        let zero = c.zero();
+        for rp in &mut c.periods {
+            rp.paid_principal = zero.clone();
+            rp.paid_interest = zero.clone();
+            rp.future_unrecognized_interest = zero.clone();
+            for ip in &mut rp.interest_periods {
+                ip.balance_correction_amount = zero.clone();
+            }
+        }
+        c
+    }
+
+    /// `calculateEMIOnNewModelAndMerge` — recompute the clean annuity EMI on a paid-amount-free copy, then merge those
+    /// EMIs back into the real periods from the related-periods' first due date onward (the 2nd+ disbursement path).
+    fn calculate_emi_on_new_model_and_merge(&mut self, start: usize) {
+        let n = self.periods.len();
+        if start >= n {
+            return;
+        }
+        let first_due = self.periods[start].due;
+        let mut copy = self.copy_without_paid_amounts();
+        copy.calculate_rate_factor_for_periods();
+        copy.calculate_outstanding_balance();
+        copy.calculate_emi_on_actual_model(start);
+        copy.calculate_outstanding_balance();
+        copy.calculate_last_unpaid_emi();
+        copy.check_and_adjust_emi_if_needed(start);
+        for i in 0..n {
+            if self.periods[i].due >= first_due {
+                self.periods[i].emi = copy.periods[i].emi.clone();
+                self.periods[i].original_emi = copy.periods[i].original_emi.clone();
+            }
+        }
+    }
+
     /// `calculateLastUnpaidRepaymentPeriodEMI` (without the futureUnrecognizedInterest deferral, which only applies to
     /// late/cross-period payments not exercised by the basic payoff path).
     fn calculate_last_unpaid_emi(&mut self) {
@@ -684,6 +728,11 @@ impl Model {
     #[must_use]
     pub fn period_emi(&self, i: usize) -> Money {
         self.periods[i].emi.clone()
+    }
+    /// `ProgressiveLoanInterestScheduleModel.getTotalDueInterest()`.
+    #[must_use]
+    pub fn total_due_interest_amount(&self) -> Money {
+        self.total_due_interest()
     }
     /// `RepaymentPeriod.getDueInterest()`.
     #[must_use]
@@ -835,6 +884,7 @@ impl Model {
                 rp.total_disbursed_amount = rp.total_disbursed_amount.plus(amount);
             }
         }
+        let was_empty = self.is_empty();
         if let Some(rp_idx) =
             self.change_outstanding_and_split(date, amount, &self.zero(), &self.zero())
         {
@@ -842,10 +892,18 @@ impl Model {
             let related_start = self.related_start(self.effective_due_date(rp_idx, date));
             self.calculate_rate_factor_for_periods();
             self.calculate_outstanding_balance();
-            self.calculate_emi_on_actual_model(related_start);
+            if was_empty {
+                // onlyOnActualModelShouldApply (first disbursement / empty schedule).
+                self.calculate_emi_on_actual_model(related_start);
+            } else {
+                // Subsequent disbursement: recompute on a clean copy and merge the EMIs back.
+                self.calculate_emi_on_new_model_and_merge(related_start);
+            }
             self.calculate_outstanding_balance();
             self.calculate_last_unpaid_emi();
-            self.check_and_adjust_emi_if_needed(related_start);
+            if was_empty {
+                self.check_and_adjust_emi_if_needed(related_start);
+            }
         }
     }
 

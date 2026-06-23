@@ -1600,3 +1600,49 @@ fn last_period_due_amounts_and_zero_correction_split() {
     assert_eq!(last[1].from, d(2024, Month::June, 10));
     assert_eq!(last[1].due, jul1);
 }
+
+/// `test_multidisbursement_total_repay1st_*`: disburse 300, fully repay all six periods on the disbursement date, then
+/// a second disbursement of 200 on the same date. The second disbursement recomputes the EMI via the new-model merge
+/// (paid-amount-free copy) — total due interest 4.11, EMI on the still-open periods 85.04 then 78.91 on the last.
+#[test]
+fn multi_disbursement_after_full_repay() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("300"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let jan1 = d(2024, Month::January, 1);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    // fully repay all six periods on Jan 1 (51.03 x5 + 44.85 = 300).
+    for (i, (from, due)) in six_monthly().iter().enumerate() {
+        let amt = if i == 5 { "44.85" } else { "51.03" };
+        model.pay_principal(*from, *due, jan1, &m(amt));
+    }
+    assert_eq!(
+        model.total_due_interest_amount().to_plain_string(),
+        "0.00",
+        "all interest paid off"
+    );
+
+    // second disbursement of 200 on Jan 1.
+    model.add_disbursement(jan1, &m("200.0"));
+    assert_eq!(
+        model.total_due_interest_amount().to_plain_string(),
+        "4.11",
+        "total due interest after 2nd disbursement"
+    );
+    assert_eq!(
+        model.period_emi(4).to_plain_string(),
+        "85.04",
+        "period 4 EMI"
+    );
+    assert_eq!(
+        model.period_emi(5).to_plain_string(),
+        "78.91",
+        "period 5 EMI"
+    );
+}
