@@ -1787,3 +1787,64 @@ fn chargeback_mid_instalment() {
     check_rp(&model, 4, "17.01", "0.20", "16.81", "16.96");
     check_rp(&model, 5, "17.06", "0.10", "16.96", "0.00");
 }
+
+/// `test_s5_chargeback_in_period_*`: a mid-period chargeback (16.52 principal + 0.49 interest) on Mar 15 after repaying
+/// periods 0-1, then `getDueAmounts` at the mid-period target Mar 15. The live period-2 due principal is 33.09, while
+/// the recalc-till-Mar-15 due amounts are 33.35 / 0.67 (interest accrued only to Mar 15).
+#[test]
+fn chargeback_mid_period_then_get_due_amounts() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1);
+    let mar1 = d(2024, Month::March, 1);
+    let apr1 = d(2024, Month::April, 1);
+    let mar15 = d(2024, Month::March, 15);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    model.pay_principal(jan1, feb1, feb1, &m("16.43"));
+    model.pay_interest(jan1, feb1, feb1, &m("0.58"));
+    model.pay_principal(feb1, mar1, mar1, &m("16.52"));
+    model.pay_interest(feb1, mar1, mar1, &m("0.49"));
+
+    model.credit_principal(mar15, &m("16.52"));
+    model.credit_interest(mar15, &m("0.49"));
+
+    // live model: period 2 due principal 33.09.
+    assert_eq!(model.period_due_principal(2).to_plain_string(), "33.09");
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.002634408602",
+        "0.176637096765",
+        "0.93",
+        "33.09",
+        "50.48",
+    );
+    check_ip(
+        &model,
+        2,
+        1,
+        "17.01",
+        "0.003198924731",
+        "0.75733413977",
+        "0.93",
+        "33.09",
+        "50.48",
+    );
+    check_rp(&model, 3, "17.01", "0.29", "16.72", "33.76");
+    check_rp(&model, 5, "17.05", "0.10", "16.95", "0.00");
+
+    // getDueAmounts at the mid-period target Mar 15 (interest accrued only to Mar 15).
+    let due = model.get_due_amounts(mar1, apr1, mar15).unwrap();
+    assert_eq!(due.due_principal.to_plain_string(), "33.35");
+    assert_eq!(due.due_interest.to_plain_string(), "0.67");
+}
