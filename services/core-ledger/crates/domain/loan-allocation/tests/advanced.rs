@@ -1,15 +1,11 @@
-//! Conformance: replay the in-scope scenarios from the progressive processor's VERIFIED unit test
-//! `AdvancedPaymentScheduleTransactionProcessorTest` and assert the EXACT components/credited amounts.
+//! Conformance: replay the scenarios from the progressive processor's VERIFIED unit test
+//! `AdvancedPaymentScheduleTransactionProcessorTest` (all 13 of its `@Test`s — golden baseline re-verified by running
+//! the original on JDK 21) and assert the EXACT components / credited amounts / calculator interactions.
 //!
-//! Covered (see `src/advanced.rs` for scope notes):
-//!  - `chargePaymentTransactionTestWithExactAmount`     — a charge fully paid.
-//!  - `chargePaymentTransactionTestWithLessTransactionAmount` — a charge partially paid.
-//!  - `chargePaymentTransactionTestWithMoreTransactionAmount` — mixed charge + (unprocessed) principal: only the
-//!    charge-handling portion is asserted here (the principal allocation of the 20 remainder runs in the
-//!    out-of-scope `processTransaction` driver).
-//!  - `testProcessCreditTransactionWithAllocationRulePrincipalPenaltyFeeInterest` and
-//!    `testProcessCreditTransactionWithAllocationRulePenaltyFeePrincipalInterest` — chargeback crediting principal
-//!    (the credited-principal model).
+//! Covered: the 3 `chargePayment*` tests; the 3 chargeback-credit tests (incl. the additional-installment one);
+//! `calculateChargebackAllocationMap`; the 4 `findOriginalTransaction` tests; `testDisbursementAfterMaturityDate
+//! WithEMICalculator`; and `testProcessLatestTransaction_PassesThroughHandlingPaymentAllocationForInterestBearing
+//! ProgressiveLoan`. See `src/advanced.rs` for the (engine) scope notes.
 //!
 //! Currency USD/2, HALF_EVEN, matching the original.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code
@@ -17,10 +13,11 @@
 use bigdecimal::{BigDecimal, RoundingMode};
 use fc_loan_allocation::Installment;
 use fc_loan_allocation::advanced::{
-    AdvancedInstallment, AllocationType, ChangedTransactionDetail, EmiCalculator, LoanTxnView,
-    OriginalAllocation, RelationType, ScheduleModel, TxnChange, TxnRelation,
-    calculate_chargeback_allocation_map, find_chargeback_original_transaction,
-    handle_charge_payment, handle_disbursement_with_emi, process_credit_transaction,
+    AdvancedInstallment, AllocationType, ChangedTransactionDetail, DueType, EmiCalculator,
+    LoanTxnView, OriginalAllocation, PaymentAllocation, RelationType, ScheduleModel, TxnChange,
+    TxnRelation, calculate_chargeback_allocation_map, find_chargeback_original_transaction,
+    handle_charge_payment, handle_disbursement_with_emi,
+    handle_payment_allocation_interest_bearing, process_credit_transaction,
 };
 use fc_money::Money;
 use time::{Date, Month};
@@ -681,6 +678,66 @@ fn disbursement_after_maturity_creates_additional_installment() {
         "principal == disbursement amount"
     );
     assert_eq!(installments.len(), 4, "installment appended to schedule");
+}
+
+/// `testProcessLatestTransaction_PassesThroughHandlingPaymentAllocationForInterestBearingProgressiveLoan`: for an
+/// interest-bearing progressive loan, a DUE_PRINCIPAL allocation against the due installment pays the installment's
+/// principal and then *passes through* to `emiCalculator.payPrincipal(model, fromDate, dueDate, payDate, paidPortion)`
+/// with the full transaction amount. (Tested at the method the original test is named for; the surrounding
+/// `processPeriodsHorizontally` installment-selection walk is the broader engine, out of scope.)
+#[test]
+fn payment_allocation_passthrough_pays_principal_via_emi_calculator() {
+    let from = date(2023, Month::January, 1);
+    let due = date(2023, Month::February, 1);
+    let mut inst = AdvancedInstallment::new(
+        Installment::new(
+            SCALE,
+            MODE,
+            due,
+            BigDecimal::from(100),
+            BigDecimal::from(0),
+            BigDecimal::from(100),
+            BigDecimal::from(0),
+        ),
+        false,
+    )
+    .with_from_date(from);
+
+    let model = ScheduleModel {
+        maturity_date: date(2023, Month::December, 31),
+    };
+    let mut calc = RecordingCalc::default();
+    let alloc = PaymentAllocation {
+        allocation_type: AllocationType::Principal,
+        due_type: DueType::Due,
+    };
+
+    // transaction date == due date (an on-time payment); the EMI period-from is the due installment's from date.
+    let paid = handle_payment_allocation_interest_bearing(
+        &mut calc,
+        &model,
+        &mut inst,
+        alloc,
+        due,
+        &money("100"),
+    );
+
+    assert_eq!(
+        paid.to_plain_string(),
+        money("100").to_plain_string(),
+        "paid portion"
+    );
+    assert_eq!(calc.principal_pays.len(), 1, "payPrincipal called once");
+    let (period_from, period_due, pay_date, amount) = &calc.principal_pays[0];
+    assert_eq!(*period_from, from, "period from date");
+    assert_eq!(*period_due, due, "period due date");
+    assert_eq!(*pay_date, due, "pay date == transaction date");
+    assert_eq!(amount, &money("100").to_plain_string(), "paid amount");
+    assert_eq!(
+        inst.installment().principal_outstanding().to_plain_string(),
+        money("0").to_plain_string(),
+        "installment principal consumed"
+    );
 }
 
 /// `...FallbackToPersistedTransactions`: same recovery, but the matching repayment is only in the persisted loan

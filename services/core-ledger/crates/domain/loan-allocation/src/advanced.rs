@@ -1,9 +1,8 @@
 //! Bounded slice of the progressive `AdvancedPaymentScheduleTransactionProcessor`
 //! (`fineract-progressive-loan/.../transactionprocessor/impl/AdvancedPaymentScheduleTransactionProcessor.java`).
 //!
-//! The behaviors asserted by `AdvancedPaymentScheduleTransactionProcessorTest` are ported here (12 of its 13 tests —
-//! all but `testProcessLatestTransaction_PassesThroughHandlingPaymentAllocationForInterestBearingProgressiveLoan`,
-//! which needs the full progressive payment-allocation engine; see the out-of-scope note):
+//! All 13 behaviors asserted by `AdvancedPaymentScheduleTransactionProcessorTest` are ported here (golden baseline
+//! re-verified by running the original test — BUILD SUCCESSFUL on JDK 21):
 //!
 //! 1. **Charge payment** (`handleChargePayment`, src line 2368) — a single loan charge paid against the (single) due
 //!    installment, fully or partially. Mirrors `payFeeChargesComponent` / `payPenaltyChargesComponent`, the
@@ -18,10 +17,13 @@
 //!    via the reverse-replay change set, or falling back to the loan's persisted transactions.
 //! 4. **Disbursement after maturity** (`handleDisbursementWithEMICalculator`, src line 1646) — handing the
 //!    disbursement to the [`EmiCalculator`] seam and creating the N+1 **additional** installment.
+//! 5. **Payment-allocation passthrough** (`handlingPaymentAllocationForInterestBearingProgressiveLoan`, src line 2884)
+//!    — paying the installment component then informing the [`EmiCalculator`] (`payPrincipal` / `payInterest`).
 //!
 //! **Out of scope** (the rest of the 4296-line processor + the EMI engine it drives): the progressive
-//! payment-allocation engine (`processTransaction` → `processPeriodsHorizontally`/`Vertically` → `processPayment
-//! Allocation` + payable-details), the interest-recalculation EMI path (`processCreditTransactionWithEmiCalculator`),
+//! payment-allocation *walk* that selects installments/buckets (`processTransaction` →
+//! `processPeriodsHorizontally`/`Vertically`), the interest-recalculation EMI path
+//! (`processCreditTransactionWithEmiCalculator`),
 //! re-age / re-amortize / capitalized-income, `adjustOriginalAllocationWithFormerChargebacks` for *prior* chargebacks,
 //! overpayment allocation, and charge reprocessing. The [`EmiCalculator`] is a **seam** (trait) here — its math lives
 //! in the separate progressive interest-schedule engine. The credited-* / `addToPrincipal` effects are modeled on a
@@ -110,6 +112,8 @@ impl ChargebackAllocation {
 #[derive(Clone, Debug)]
 pub struct AdvancedInstallment {
     inner: Installment,
+    /// `getFromDate()` — the period start (defaults to the due date; set via [`AdvancedInstallment::with_from_date`]).
+    from_date: Date,
     /// `isAdditional()` — an N+1 chargeback installment vs. a normal schedule row.
     pub is_additional: bool,
     credited_principal: Money,
@@ -122,11 +126,14 @@ pub struct AdvancedInstallment {
 }
 
 impl AdvancedInstallment {
-    /// Wrap a base [`Installment`] with the credited-amount view; all credited buckets start at zero.
+    /// Wrap a base [`Installment`] with the credited-amount view; all credited buckets start at zero and `from_date`
+    /// defaults to the due date.
     #[must_use]
     pub fn new(inner: Installment, is_additional: bool) -> Self {
         let z = inner.zero();
+        let from_date = inner.due_date;
         Self {
+            from_date,
             credited_principal: z.clone(),
             credited_interest: z.clone(),
             credited_fee: z.clone(),
@@ -135,6 +142,19 @@ impl AdvancedInstallment {
             is_additional,
             inner,
         }
+    }
+
+    /// Set the period start date (`getFromDate()`).
+    #[must_use]
+    pub fn with_from_date(mut self, from_date: Date) -> Self {
+        self.from_date = from_date;
+        self
+    }
+
+    /// `getFromDate()`.
+    #[must_use]
+    pub fn from_date(&self) -> Date {
+        self.from_date
     }
 
     /// `getDueDate()`.
@@ -564,4 +584,81 @@ pub fn handle_disbursement_with_emi(
     }
 
     DisbursementResult { created_additional }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Payment allocation passthrough for interest-bearing progressive loans
+// (handlingPaymentAllocationForInterestBearingProgressiveLoan, src line 2884)
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// `PaymentAllocationType.getDueType()` — which installment bucket an allocation targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DueType {
+    /// `DueType.PAST_DUE`.
+    PastDue,
+    /// `DueType.DUE`.
+    Due,
+    /// `DueType.IN_ADVANCE`.
+    InAdvance,
+}
+
+/// A `PaymentAllocationType` (subset): which component, in which due bucket.
+#[derive(Clone, Copy, Debug)]
+pub struct PaymentAllocation {
+    pub allocation_type: AllocationType,
+    pub due_type: DueType,
+}
+
+/// `processPaymentAllocation` PAY action (src line 2013), reduced to the component bucket pay: route to the
+/// installment's `pay_*` atom and return the consumed portion.
+fn pay_component(
+    inst: &mut AdvancedInstallment,
+    allocation_type: AllocationType,
+    amount: &Money,
+) -> Money {
+    let i = inst.installment_mut();
+    match allocation_type {
+        AllocationType::Penalty => i.pay_penalty(amount),
+        AllocationType::Fee => i.pay_fee(amount),
+        AllocationType::Interest => i.pay_interest(amount),
+        AllocationType::Principal => i.pay_principal(amount),
+    }
+}
+
+/// `handlingPaymentAllocationForInterestBearingProgressiveLoan` (src line 2884): pay the allocation's component on the
+/// installment, then **inform the EMI calculator** of a principal/interest payment so it can recompute the interest
+/// schedule. Returns the paid portion.
+///
+/// Faithful for the DUE / PAST_DUE path. **Out of scope (engine seam):** the IN_ADVANCE pay-date recalculation
+/// (`calculateNewPayDateInCaseOfInAdvancePayment` + `updateRepaymentPeriodBalances`) and the post-call
+/// `updateInstallmentsByRepaymentPeriods` model→installment sync (a no-op when the model has no repayment periods, as
+/// in the originating unit test). The down-payment skip is represented only by the post-maturity guard.
+pub fn handle_payment_allocation_interest_bearing(
+    calc: &mut dyn EmiCalculator,
+    model: &ScheduleModel,
+    installment: &mut AdvancedInstallment,
+    allocation: PaymentAllocation,
+    txn_date: Date,
+    unprocessed: &Money,
+) -> Money {
+    // Skip interest/principal model processing for periods after the loan maturity date (down-payment skip not modeled).
+    if installment.due_date() > model.maturity_date {
+        return pay_component(installment, allocation.allocation_type, unprocessed);
+    }
+
+    // payDate == transaction date for DUE/PAST_DUE; the IN_ADVANCE recalculation is out of scope.
+    let pay_date = txn_date;
+    let from_date = installment.from_date();
+    let due_date = installment.due_date();
+
+    let paid = pay_component(installment, allocation.allocation_type, unprocessed);
+
+    match allocation.allocation_type {
+        AllocationType::Principal => {
+            calc.pay_principal(model, from_date, due_date, pay_date, &paid)
+        }
+        AllocationType::Interest => calc.pay_interest(model, from_date, due_date, pay_date, &paid),
+        AllocationType::Fee | AllocationType::Penalty => {}
+    }
+    paid
 }
