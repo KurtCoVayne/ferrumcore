@@ -823,9 +823,26 @@ impl Model {
         };
         let negated = self.zero().minus(amount); // principalAmount.negated()
         self.add_balance_correction(balance_correction_date, &negated);
-        // EMI recalculation tail (multiplePeriodsAreUnpaid branch) — not needed for the simple payoff path beyond what
-        // add_balance_correction already did; calculate_last_unpaid_emi ran inside it.
+        let not_fully_repaid = (0..self.periods.len())
+            .filter(|&i| !self.is_fully_paid(i))
+            .count();
+        let multiple_unpaid = not_fully_repaid > 1;
         if self.emi_recalculation_enabled {
+            // If a future period is (over)paid early, mark it fully paid by setting its EMI to the paid amount.
+            if multiple_unpaid {
+                let transaction_before = transaction_date < self.periods[rp_idx].from;
+                if transaction_before {
+                    let total_paid = self.total_paid_amount(rp_idx);
+                    let total_credited = self.total_credited_amount(rp_idx);
+                    let original_with_credit =
+                        self.periods[rp_idx].original_emi.plus(&total_credited);
+                    if total_paid.is_greater_than(&self.emi_plus_credited_plus_future(rp_idx))
+                        || is_equal_to(&total_paid, &original_with_credit)
+                    {
+                        self.periods[rp_idx].emi = total_paid.minus(&total_credited);
+                    }
+                }
+            }
             self.calculate_last_unpaid_emi();
         }
     }

@@ -346,3 +346,126 @@ fn payoff_get_due_amounts_fresh() {
     assert_eq!(c.due_principal.to_plain_string(), "16.77");
     assert_eq!(c.due_interest.to_plain_string(), "0.24");
 }
+
+/// `test_fullyRepay_on0215_*`: full early payoff of every period on Feb 15 (a second, independent stateful golden that
+/// exercises the early-payoff EMI override — paying future periods before their start date marks them fully paid).
+#[test]
+fn fully_repay_on_feb15() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1);
+    let mar1 = d(2024, Month::March, 1);
+    let apr1 = d(2024, Month::April, 1);
+    let may1 = d(2024, Month::May, 1);
+    let jun1 = d(2024, Month::June, 1);
+    let jul1 = d(2024, Month::July, 1);
+    let feb15 = d(2024, Month::February, 15);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    // partial pay of period 0 with a balance correction, then check the forecast is unchanged.
+    let f = model.get_due_amounts(feb1, mar1, feb15).unwrap();
+    assert_eq!(f.due_principal.to_plain_string(), "16.77");
+    assert_eq!(f.due_interest.to_plain_string(), "0.24");
+    model.pay_principal(jan1, feb1, feb15, &m("15.0"));
+    let g = model.get_due_amounts(feb1, mar1, mar1).unwrap();
+    assert_eq!(g.due_principal.to_plain_string(), "16.52");
+    assert_eq!(g.due_interest.to_plain_string(), "0.49");
+
+    // full payoff of all periods on Feb 15.
+    model.pay_principal(jan1, feb1, feb15, &m("1.43"));
+    model.pay_interest(jan1, feb1, feb15, &m("0.58"));
+    model.pay_principal(feb1, mar1, feb15, &m("16.77"));
+    model.pay_interest(feb1, mar1, feb15, &m("0.24"));
+    model.pay_principal(mar1, apr1, feb15, &m("17.01"));
+    model.pay_principal(apr1, may1, feb15, &m("17.01"));
+    model.pay_principal(may1, jun1, feb15, &m("17.01"));
+    model.pay_principal(jun1, jul1, feb15, &m("15.77"));
+
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.005833333333",
+        "0.5833333333",
+        "0.58",
+        "16.43",
+        "83.57",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.002816091954",
+        "0.235340804584",
+        "0.24",
+        "16.77",
+        "0.00",
+    );
+    check_ip(
+        &model,
+        1,
+        1,
+        "17.01",
+        "0.003017241379",
+        "0.0",
+        "0.24",
+        "16.77",
+        "0.00",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.0",
+        "0.00",
+        "17.01",
+        "0.00",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.0",
+        "0.00",
+        "17.01",
+        "0.00",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.0",
+        "0.00",
+        "17.01",
+        "0.00",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "15.77",
+        "0.005833333333",
+        "0.0",
+        "0.00",
+        "15.77",
+        "0.00",
+    );
+    for i in 0..6 {
+        assert!(model.period_fully_paid(i), "period {i} fully paid");
+    }
+}
