@@ -24,6 +24,7 @@ pub mod equal_amortization;
 pub mod interest_period;
 pub mod math;
 pub mod rate_factor;
+pub mod recalc;
 pub mod schedule;
 
 pub use math::Mc;
