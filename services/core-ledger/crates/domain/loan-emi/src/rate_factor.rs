@@ -1,9 +1,9 @@
 //! Rate-factor and `fn`-value primitives — faithful port of `ProgressiveEMICalculator.rateFactorByRepaymentPeriod` /
 //! `rateFactorByRepaymentEveryMonth` and `fnValue`. These are the significant-figure (`MathContext`) annuity primitives
-//! the schedule generation is built on; arithmetic uses the proven [`MathCtx`] from `fc-loan-schedule`.
+//! the schedule generation is built on; arithmetic uses the faithful [`Mc`](crate::math::Mc).
 
+use crate::math::Mc;
 use bigdecimal::BigDecimal;
-use fc_loan_schedule::MathCtx;
 use fc_money::decimal;
 
 fn is_zero(x: &BigDecimal) -> bool {
@@ -16,7 +16,7 @@ fn is_zero(x: &BigDecimal) -> bool {
 /// Zero when `calculatedDays` is zero.
 #[must_use]
 pub fn rate_factor_by_repayment_period(
-    mc: &MathCtx,
+    mc: &Mc,
     interest_rate: &BigDecimal,
     multiplier_in_days: &BigDecimal,
     repayment_every: &BigDecimal,
@@ -43,7 +43,7 @@ pub fn rate_factor_by_repayment_period(
 /// the days-in-month as the multiplier.
 #[must_use]
 pub fn rate_factor_by_repayment_every_month(
-    mc: &MathCtx,
+    mc: &Mc,
     interest_rate: &BigDecimal,
     repayment_every: &BigDecimal,
     days_in_month: &BigDecimal,
@@ -66,7 +66,7 @@ pub fn rate_factor_by_repayment_every_month(
 /// significant figures. The accumulating denominator of the annuity (EMI) formula.
 #[must_use]
 pub fn fn_value(
-    mc: &MathCtx,
+    mc: &Mc,
     previous_fn_value: &BigDecimal,
     current_rate_factor_plus_one: &BigDecimal,
 ) -> BigDecimal {

@@ -4,8 +4,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code
 
 use bigdecimal::{BigDecimal, RoundingMode};
+use fc_loan_emi::Mc;
 use fc_loan_emi::interest_period::calculated_due_interest_declining;
-use fc_loan_schedule::MathCtx;
 use fc_money::decimal::to_plain_string;
 use std::str::FromStr;
 
@@ -15,7 +15,7 @@ fn bd(s: &str) -> BigDecimal {
 
 #[test]
 fn full_period_interest() {
-    let mc = MathCtx::new(12, RoundingMode::HalfEven);
+    let mc = Mc::new(12, RoundingMode::HalfEven);
     let r = calculated_due_interest_declining(
         &mc,
         &bd("100"),
@@ -30,7 +30,7 @@ fn full_period_interest() {
 #[test]
 fn partial_period_interest() {
     // half the period (15 of 30 days).
-    let mc = MathCtx::new(12, RoundingMode::HalfEven);
+    let mc = Mc::new(12, RoundingMode::HalfEven);
     let r = calculated_due_interest_declining(
         &mc,
         &bd("100"),
@@ -44,7 +44,7 @@ fn partial_period_interest() {
 
 #[test]
 fn interest_plus_credited() {
-    let mc = MathCtx::new(12, RoundingMode::HalfEven);
+    let mc = Mc::new(12, RoundingMode::HalfEven);
     let r = calculated_due_interest_declining(
         &mc,
         &bd("100"),
@@ -58,7 +58,7 @@ fn interest_plus_credited() {
 
 #[test]
 fn zero_length_till_due_yields_credited_only() {
-    let mc = MathCtx::new(12, RoundingMode::HalfEven);
+    let mc = Mc::new(12, RoundingMode::HalfEven);
     let r = calculated_due_interest_declining(
         &mc,
         &bd("100"),
@@ -67,15 +67,14 @@ fn zero_length_till_due_yields_credited_only() {
         0,
         &bd("0.25"),
     );
-    // Numerically 0.25 (the credited interest). The raw intermediate carries significant-figure padding from the
-    // MathContext add; it collapses to "0.25" once summed into a Money at currency scale. Assert the value.
-    assert_eq!(fc_money::decimal::compare(&r, &bd("0.25")), 0);
+    // Faithful Mc does not pad: credited-only interest renders as "0.25" (matching Java's no-pad round).
+    assert_eq!(to_plain_string(&r), "0.25");
 }
 
 #[test]
 fn negative_sum_floored_to_zero() {
     // credited interest negative enough to make the sum negative → floored at zero.
-    let mc = MathCtx::new(12, RoundingMode::HalfEven);
+    let mc = Mc::new(12, RoundingMode::HalfEven);
     let r = calculated_due_interest_declining(
         &mc,
         &bd("100"),

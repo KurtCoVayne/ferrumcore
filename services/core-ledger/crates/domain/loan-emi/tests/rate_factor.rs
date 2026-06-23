@@ -5,8 +5,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code
 
 use bigdecimal::{BigDecimal, RoundingMode};
+use fc_loan_emi::Mc;
 use fc_loan_emi::{fn_value, rate_factor_by_repayment_every_month};
-use fc_loan_schedule::MathCtx;
 use fc_money::decimal::to_plain_string;
 use std::str::FromStr;
 use time::{Date, Month};
@@ -40,7 +40,7 @@ fn days(from: Date, due: Date) -> BigDecimal {
 
 #[test]
 fn rate_factor_days365_actual_month() {
-    let mc = MathCtx::new(12, RoundingMode::HalfEven);
+    let mc = Mc::new(12, RoundingMode::HalfEven);
     let rate = bd("0.094822");
     let expected = [
         "0.008053375342",
@@ -67,7 +67,7 @@ fn rate_factor_days365_actual_month() {
 
 #[test]
 fn rate_factor_actual_year_actual_month() {
-    let mc = MathCtx::new(12, RoundingMode::HalfEven);
+    let mc = Mc::new(12, RoundingMode::HalfEven);
     let rate = bd("0.094822");
     // 2024 is a leap year → actual days in year = 366.
     let expected = [
@@ -95,7 +95,7 @@ fn rate_factor_actual_year_actual_month() {
 
 #[test]
 fn fn_value_sequence_days365() {
-    let mc = MathCtx::new(12, RoundingMode::HalfEven);
+    let mc = Mc::new(12, RoundingMode::HalfEven);
     let rate = bd("0.094822");
     let expected = [
         "1.00000000000",

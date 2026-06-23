@@ -5,8 +5,8 @@
 //! Currently the **declining-balance** path (`baseAmount = outstandingLoanBalance`); the flat path
 //! (`baseAmount = total disbursed + capitalized income`) and the surrounding mutable model are later slices.
 
+use crate::math::Mc;
 use bigdecimal::BigDecimal;
-use fc_loan_schedule::MathCtx;
 use fc_money::decimal;
 
 fn negative_to_zero(x: BigDecimal) -> BigDecimal {
@@ -25,7 +25,7 @@ fn negative_to_zero(x: BigDecimal) -> BigDecimal {
 /// `length_till_due` is zero the accrued portion is zero (matching the guard in `getCalculatedDueInterest(method, len)`).
 #[must_use]
 pub fn calculated_due_interest_declining(
-    mc: &MathCtx,
+    mc: &Mc,
     outstanding_balance: &BigDecimal,
     rate_factor_till_period_due_date: &BigDecimal,
     length: i64,

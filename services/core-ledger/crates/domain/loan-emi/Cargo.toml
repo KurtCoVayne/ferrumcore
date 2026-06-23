@@ -13,9 +13,7 @@ workspace = true
 bigdecimal = { workspace = true }
 time = { workspace = true }
 fc-money = { workspace = true }
-fc-loan-schedule = { path = "../loan-schedule" }
 
 [dev-dependencies]
 fc-money = { workspace = true }
-fc-loan-schedule = { path = "../loan-schedule" }
 time = { workspace = true }
