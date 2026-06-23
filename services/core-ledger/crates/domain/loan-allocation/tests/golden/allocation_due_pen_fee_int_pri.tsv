@@ -1,0 +1,39 @@
+# Legacy allocation golden — DuePenFeeIntPriInAdvancePriPenFeeInt strategy, charge-free scenarios.
+# Transcribed verbatim from the original's VERIFIED unit test:
+#   fineract-provider/.../transactionprocessor/impl/DuePenFeeIntPriInAdvancePriPenFeeIntLoanRepaymentScheduleTransactionProcessorTest.java
+# Currency: USD scale 2, HALF_EVEN. Each row asserts the updateComponents(principal,interest,fee,penalty) tuple + unprocessed.
+# timing: IA=in-advance (txn 2023-07-11 < due 2023-07-31), OT=on-time (txn==due), LATE (txn 2023-08-01 > due).
+# Columns: timing	principal	interest	fee	penalty	txn	exp_principal	exp_interest	exp_fee	exp_penalty	exp_unprocessed	src_method
+IA	5	0	0	0	10	5	0	0	0	5	inAdvancePaymentOfPrincipal
+IA	0	5	0	0	10	0	5	0	0	5	inAdvancePaymentOfInterest
+IA	0	0	5	0	10	0	0	5	0	5	inAdvancePaymentOfFee
+IA	0	0	0	5	10	0	0	0	5	5	inAdvancePaymentOfPenalty
+IA	5	0	0	5	10	5	0	0	5	0	inAdvancePaymentOfPrincipalAndPenalty
+IA	3	0	2	6	10	3	0	1	6	0	inAdvancePaymentOfPrincipalAndPenaltyAndFee
+IA	3	2	2	4	10	3	1	2	4	0	inAdvancePaymentOfPrincipalAndPenaltyAndFeeAndInterest
+IA	3	2	2	4	2	2	0	0	0	0	inAdvancePaymentOf..ButNotEnoughOnlyForPartialPrincipal
+IA	3	2	2	4	4	3	0	0	1	0	inAdvancePaymentOf..PrincipalAndPartialPenalty
+IA	3	2	2	4	8	3	0	1	4	0	inAdvancePaymentOf..PrincipalAndPenaltyAndPartialFee
+IA	3	2	2	4	10	3	1	2	4	0	inAdvancePaymentOf..PrincipalAndPenaltyAndFeeAndPartialInterest
+OT	5	0	0	0	10	5	0	0	0	5	onTimePaymentOfPrincipal
+OT	0	5	0	0	10	0	5	0	0	5	onTimePaymentOfInterest
+OT	0	0	5	0	10	0	0	5	0	5	onTimePaymentOfFee
+OT	0	0	0	5	10	0	0	0	5	5	onTimePaymentOfPenalty
+OT	5	0	0	5	10	5	0	0	5	0	onTimePaymentOfPrincipalAndPenalty
+OT	3	0	2	6	10	2	0	2	6	0	onTimePaymentOfPrincipalAndPenaltyAndFee
+OT	3	2	2	4	10	2	2	2	4	0	onTimePaymentOfPrincipalAndPenaltyAndFeeAndInterest
+OT	3	2	2	4	1	0	0	0	1	0	onTimePaymentOf..ButNotEnoughOnlyForPartialPenalty
+OT	3	2	2	4	5	0	0	1	4	0	onTimePaymentOf..PenaltyAndPartialFee
+OT	3	2	2	4	7	0	1	2	4	0	onTimePaymentOf..PenaltyAndFeeAndPartialInterest
+OT	3	2	2	4	10	2	2	2	4	0	onTimePaymentOf..PenaltyAndFeeAndInterestAndPartialPrincipal
+LATE	5	0	0	0	10	5	0	0	0	5	latePaymentOfPrincipal
+LATE	0	5	0	0	10	0	5	0	0	5	latePaymentOfInterest
+LATE	0	0	5	0	10	0	0	5	0	5	latePaymentOfFee
+LATE	0	0	0	5	10	0	0	0	5	5	latePaymentOfPenalty
+LATE	5	0	0	5	10	5	0	0	5	0	latePaymentOfPrincipalAndPenalty
+LATE	3	0	2	6	10	2	0	2	6	0	latePaymentOfPrincipalAndPenaltyAndFee
+LATE	3	2	2	4	10	2	2	2	4	0	latePaymentOfPrincipalAndPenaltyAndFeeAndInterest
+LATE	3	2	2	4	1	0	0	0	1	0	latePaymentOf..ButNotEnoughOnlyForPartialPenalty
+LATE	3	2	2	4	5	0	0	1	4	0	latePaymentOf..PenaltyAndPartialFee
+LATE	3	2	2	4	7	0	1	2	4	0	latePaymentOf..PenaltyAndFeeAndPartialInterest
+LATE	3	2	2	4	10	2	2	2	4	0	latePaymentOf..PenaltyAndFeeAndInterestAndPartialPrincipal

@@ -6,7 +6,15 @@
 //! [`allocate_late`], [`allocate_refund`]) layer on the common waiver / charge-payment / refund branches that every
 //! original processor shares verbatim.
 
+pub mod creocore;
+pub mod due_pen_fee_int_pri;
 pub mod due_pen_int_pri_fee;
+pub mod early_payment;
+pub mod fineract_style;
+pub mod heavens_family;
+pub mod interest_principal_penalty_fees_order;
+pub mod principal_interest_penalty_fees_order;
+pub mod rbi;
 
 use crate::installment::Installment;
 use crate::model::{Allocation, PendingCharge, Txn, TxnKind};
@@ -45,6 +53,26 @@ pub trait Strategy {
     ) -> Allocation {
         let _ = charges;
         self.on_time_repayment(inst, date, amount)
+    }
+
+    /// `isTransactionInAdvanceOfInstallment` — is the payment "in advance" of the installment at `index`? Base
+    /// implementation: the transaction date is before *this* installment's due date. `HeavensFamily` overrides this to
+    /// compare against the *previous* installment's due date.
+    fn is_in_advance(&self, index: usize, installments: &[Installment], date: Date) -> bool {
+        installments.get(index).is_some_and(|i| date < i.due_date)
+    }
+
+    /// `isTransactionALateRepaymentOnInstallment` — is the payment late for the installment at `index`? Base (and only)
+    /// implementation: the transaction date is after this installment's due date. No legacy strategy overrides this.
+    fn is_late(&self, index: usize, installments: &[Installment], date: Date) -> bool {
+        installments.get(index).is_some_and(|i| date > i.due_date)
+    }
+
+    /// Refund ordering (`handleRefundTransactionPaymentOfInstallment`). Default: [`common_refund`] (principal → interest
+    /// → fee → penalty). EarlyPayment, HeavensFamily, and the Pri/Int-order strategies override this with their own
+    /// distinct unpay order.
+    fn refund(&self, inst: &mut Installment, amount: &Money) -> Allocation {
+        common_refund(inst, amount)
     }
 }
 
@@ -130,29 +158,53 @@ pub fn due_charge_totals(
     (penalty, fee)
 }
 
-/// The refund ordering shared by the Fineract-style and Due* processors
-/// (`handleRefundTransactionPaymentOfInstallment`): unpay principal → interest → fee → penalty, guarded so each step
-/// only runs while a remainder is left (principal always runs first).
-#[must_use]
-pub fn common_refund(inst: &mut Installment, amount: &Money) -> Allocation {
-    let mut remaining = amount.clone();
-    let principal = inst.unpay_principal(&remaining);
-    remaining = remaining.minus(&principal);
+/// One of the four payable components, used to parameterize a strategy's refund ordering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Component {
+    Principal,
+    Interest,
+    Fee,
+    Penalty,
+}
 
+/// Reverse a refund across the four components in `order`
+/// (`handleRefundTransactionPaymentOfInstallment`): each step unpays `min(remaining, paid)` of its component while a
+/// remainder is left. Every step is guarded by `remaining > 0`; the originals leave the *first* unpay unguarded, but
+/// since a refund amount is always positive the first guard is always satisfied, so the result is identical.
+#[must_use]
+pub fn refund_in_order(
+    inst: &mut Installment,
+    amount: &Money,
+    order: [Component; 4],
+) -> Allocation {
+    let mut remaining = amount.clone();
+    let mut principal = inst.zero();
     let mut interest = inst.zero();
     let mut fee = inst.zero();
     let mut penalty = inst.zero();
-    if remaining.is_greater_than_zero() {
-        interest = inst.unpay_interest(&remaining);
-        remaining = remaining.minus(&interest);
-    }
-    if remaining.is_greater_than_zero() {
-        fee = inst.unpay_fee(&remaining);
-        remaining = remaining.minus(&fee);
-    }
-    if remaining.is_greater_than_zero() {
-        penalty = inst.unpay_penalty(&remaining);
-        remaining = remaining.minus(&penalty);
+    for component in order {
+        if !remaining.is_greater_than_zero() {
+            continue;
+        }
+        let portion = match component {
+            Component::Principal => {
+                principal = inst.unpay_principal(&remaining);
+                principal.clone()
+            }
+            Component::Interest => {
+                interest = inst.unpay_interest(&remaining);
+                interest.clone()
+            }
+            Component::Fee => {
+                fee = inst.unpay_fee(&remaining);
+                fee.clone()
+            }
+            Component::Penalty => {
+                penalty = inst.unpay_penalty(&remaining);
+                penalty.clone()
+            }
+        };
+        remaining = remaining.minus(&portion);
     }
     Allocation {
         principal,
@@ -161,6 +213,22 @@ pub fn common_refund(inst: &mut Installment, amount: &Money) -> Allocation {
         penalty,
         unprocessed: remaining,
     }
+}
+
+/// The refund ordering shared by the Fineract-style, Creocore, RBI, and Due* processors: unpay principal → interest →
+/// fee → penalty. The default for [`Strategy::refund`].
+#[must_use]
+pub fn common_refund(inst: &mut Installment, amount: &Money) -> Allocation {
+    refund_in_order(
+        inst,
+        amount,
+        [
+            Component::Principal,
+            Component::Interest,
+            Component::Fee,
+            Component::Penalty,
+        ],
+    )
 }
 
 /// Allocate an on-time transaction: common waiver / charge-payment branch, else the strategy's on-time ordering.
@@ -197,7 +265,8 @@ pub fn allocate_late(
     }
 }
 
-/// Allocate a refund (`handleRefundTransactionPaymentOfInstallment`) — currently the common ordering for all strategies.
-pub fn allocate_refund(_s: &dyn Strategy, inst: &mut Installment, amount: &Money) -> Allocation {
-    common_refund(inst, amount)
+/// Allocate a refund (`handleRefundTransactionPaymentOfInstallment`) — delegates to the strategy's refund ordering
+/// (the default is [`common_refund`]; EarlyPayment / HeavensFamily / the Pri/Int-order strategies override it).
+pub fn allocate_refund(s: &dyn Strategy, inst: &mut Installment, amount: &Money) -> Allocation {
+    s.refund(inst, amount)
 }

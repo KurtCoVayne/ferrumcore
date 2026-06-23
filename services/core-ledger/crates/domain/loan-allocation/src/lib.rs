@@ -13,15 +13,24 @@
 //!   charge-payment / refund branches every original processor shares.
 //! - [`Txn`] / [`TxnKind`] / [`Allocation`] / [`PendingCharge`] are the shared value types.
 //!
+//! - [`driver`] ports the multi-installment walk (`AbstractLoanRepaymentScheduleTransactionProcessor.processTransaction`
+//!   / the default branch of `processLatestTransaction`): which installment(s) a transaction lands on, the in-advance /
+//!   on-time / late bucketing per installment (via the [`Strategy`] timing hooks), carry-forward of the unprocessed
+//!   remainder, and the final overpayment.
+//! - [`advanced`] ports a bounded, test-backed slice of the progressive `AdvancedPaymentScheduleTransactionProcessor`
+//!   (charge payment + chargeback credited-principal).
+//!
 //! Proven by the per-strategy conformance suites in `tests/`, which replay the original VERIFIED unit tests
 //! (`*LoanRepaymentScheduleTransactionProcessorTest`) and assert the exact
 //! `updateComponents(principal, interest, fee, penalty)` tuple plus the unprocessed remainder.
 //!
-//! **Out of scope (later slices):** the multi-installment driver (`processLatestTransaction`) and the progressive
-//! `AdvancedPaymentScheduleTransactionProcessor`. Installment side-state that does not affect the allocation outcome
-//! (`obligationsMet`, advance/late running totals) is intentionally not modeled.
+//! **Out of scope (later slices):** the rest of the 4296-line `AdvancedPaymentScheduleTransactionProcessor` (interest
+//! recalculation, re-age/re-amortize, prior-chargeback adjustment). Installment side-state that does not affect the
+//! allocation outcome (`obligationsMet`, advance/late running totals) is intentionally not modeled.
 #![forbid(unsafe_code)]
 
+pub mod advanced;
+pub mod driver;
 pub mod installment;
 pub mod model;
 pub mod strategy;
