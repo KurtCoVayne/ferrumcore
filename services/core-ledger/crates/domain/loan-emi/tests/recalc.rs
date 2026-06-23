@@ -1684,3 +1684,42 @@ fn overdue_principal_added_back_each_period() {
     check_rp(&model, 4, "857.71", "42.31", "815.40", "5000.00");
     check_rp(&model, 5, "960.01", "40.94", "919.07", "5000.00");
 }
+
+/// `test_actual_actual_repayment_schedule_across_multiple_years` (payment block): 5000 @ 9.99% ACTUAL/ACTUAL, six
+/// monthly periods crossing 2023→2024; period 0 paid early on Dec 10 (820.76 principal + 36.95 interest = full EMI).
+/// Period 0 becomes fully paid, and the reduced early interest cascades to the remaining periods. Stateful ACTUAL/ACTUAL.
+#[test]
+fn actual_actual_early_payment() {
+    let periods = [
+        (d(2023, Month::November, 13), d(2023, Month::December, 13)),
+        (d(2023, Month::December, 13), d(2024, Month::January, 13)),
+        (d(2024, Month::January, 13), d(2024, Month::February, 13)),
+        (d(2024, Month::February, 13), d(2024, Month::March, 13)),
+        (d(2024, Month::March, 13), d(2024, Month::April, 13)),
+        (d(2024, Month::April, 13), d(2024, Month::May, 13)),
+    ];
+    let mut model = new_declining_balance_with_day_count(
+        &periods,
+        &bd("5000"),
+        &bd("9.99"),
+        DayCount::ActualActual {
+            recognition_on_disbursement: false,
+        },
+        2,
+        RoundingMode::HalfUp,
+    );
+    let nov13 = d(2023, Month::November, 13);
+    let dec13 = d(2023, Month::December, 13);
+    let dec10 = d(2023, Month::December, 10);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfUp, &bd(s));
+    model.pay_principal(nov13, dec13, dec10, &m("820.76"));
+    model.pay_interest(nov13, dec13, dec10, &m("36.95"));
+
+    check_rp(&model, 0, "857.71", "36.95", "820.76", "4179.24");
+    assert!(model.period_fully_paid(0), "period 0 fully paid");
+    check_rp(&model, 1, "857.71", "38.85", "818.86", "3360.38");
+    check_rp(&model, 2, "857.71", "28.43", "829.28", "2531.10");
+    check_rp(&model, 3, "857.71", "20.04", "837.67", "1693.43");
+    check_rp(&model, 4, "857.71", "14.33", "843.38", "850.05");
+    check_rp(&model, 5, "857.01", "6.96", "850.05", "0.00");
+}
