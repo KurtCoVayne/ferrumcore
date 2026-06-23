@@ -1554,3 +1554,49 @@ fn change_interest_rate_clean() {
     check_rp(&model, 4, "16.90", "0.11", "16.79", "16.84");
     check_rp(&model, 5, "16.90", "0.06", "16.84", "0.00");
 }
+
+/// `test_balance_correction_on0215_*` (tail): after the two early payments, `getDueAmounts` on the last period at its
+/// due date and after it both return 16.75 / 0.10; then a zero balance correction on Jun 10 splits the last period's
+/// interest period into Jun1-Jun10 and Jun10-Jul1.
+#[test]
+fn last_period_due_amounts_and_zero_correction_split() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let feb1 = d(2024, Month::February, 1);
+    let mar1 = d(2024, Month::March, 1);
+    let apr1 = d(2024, Month::April, 1);
+    let jun1 = d(2024, Month::June, 1);
+    let jul1 = d(2024, Month::July, 1);
+    let feb15 = d(2024, Month::February, 15);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    model.pay_principal(feb1, mar1, feb15, &m("16.77"));
+    model.pay_interest(feb1, mar1, feb15, &m("0.24"));
+    model.pay_principal(mar1, apr1, mar1, &m("16.42"));
+    model.pay_interest(mar1, apr1, mar1, &m("0.49"));
+
+    // last period due amounts on its due date and after maturity.
+    let on_due = model.get_due_amounts(jun1, jul1, jul1).unwrap();
+    assert_eq!(on_due.due_principal.to_plain_string(), "16.75");
+    assert_eq!(on_due.due_interest.to_plain_string(), "0.10");
+    let after = model
+        .get_due_amounts(jun1, jul1, d(2024, Month::July, 15))
+        .unwrap();
+    assert_eq!(after.due_principal.to_plain_string(), "16.75");
+    assert_eq!(after.due_interest.to_plain_string(), "0.10");
+
+    // zero balance correction on Jun 10 splits the last period's interest period.
+    model.add_balance_correction(d(2024, Month::June, 10), &m("0.0"));
+    let last = &model.periods[5].interest_periods;
+    assert_eq!(last.len(), 2, "last period split into 2 interest periods");
+    assert_eq!(last[0].from, jun1);
+    assert_eq!(last[0].due, d(2024, Month::June, 10));
+    assert_eq!(last[1].from, d(2024, Month::June, 10));
+    assert_eq!(last[1].due, jul1);
+}
