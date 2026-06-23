@@ -43,13 +43,35 @@ fn monthly_periods_2024() -> Vec<(Date, Date)> {
         .collect()
 }
 
-#[test]
-fn emi_calculator_performance_fresh_disbursement() {
-    let day_count = DayCount {
+fn day_count() -> DayCount {
+    DayCount {
         days_in_year: 360,
         days_in_month: 30,
         days_in_period: 30,
-    };
+    }
+}
+
+#[test]
+fn due_amounts_first_period() {
+    let model = generate_declining_balance(
+        &monthly_periods_2024(),
+        &bd("100"),
+        &bd("7.0"),
+        day_count(),
+        2,
+        RoundingMode::HalfEven,
+    );
+    let (from, due) = monthly_periods_2024()[0];
+    let d = model.due_amounts(from, due).expect("first period");
+    // EMI 8.65; interest on 100 @ 0.005833333333 → 0.58; principal = 8.65 − 0.58 = 8.07.
+    assert_eq!(d.emi.to_plain_string(), "8.65");
+    assert_eq!(d.due_interest.to_plain_string(), "0.58");
+    assert_eq!(d.due_principal.to_plain_string(), "8.07");
+}
+
+#[test]
+fn emi_calculator_performance_fresh_disbursement() {
+    let day_count = day_count();
     let model = generate_declining_balance(
         &monthly_periods_2024(),
         &bd("100"),

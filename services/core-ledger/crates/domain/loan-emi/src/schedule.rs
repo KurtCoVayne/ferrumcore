@@ -43,6 +43,14 @@ pub struct Model {
     pub periods: Vec<RepaymentPeriod>,
 }
 
+/// `PeriodDueDetails` — the due amounts of one repayment period (`getDueAmounts`).
+#[derive(Clone, Debug)]
+pub struct PeriodDueDetails {
+    pub emi: Money,
+    pub due_principal: Money,
+    pub due_interest: Money,
+}
+
 impl Model {
     /// `getLoanTermInDays()` — actual days from the first period's start to the last period's due date.
     #[must_use]
@@ -51,6 +59,24 @@ impl Model {
             (Some(f), Some(l)) => (l.due - f.from).whole_days(),
             _ => 0,
         }
+    }
+
+    /// `findRepaymentPeriodByFromAndDueDate` — the period with the given boundaries.
+    #[must_use]
+    pub fn find_period(&self, from: Date, due: Date) -> Option<&RepaymentPeriod> {
+        self.periods.iter().find(|p| p.from == from && p.due == due)
+    }
+
+    /// `getDueAmounts(from, due, targetDate)` for the horizontal / no-recalculation case (target date at or after the
+    /// period start): the period's EMI, due principal, and due interest. The overdue/partial `recalculateScheduleModel
+    /// TillDate` + EMI-adjustment + vertical capping paths are later slices.
+    #[must_use]
+    pub fn due_amounts(&self, from: Date, due: Date) -> Option<PeriodDueDetails> {
+        self.find_period(from, due).map(|p| PeriodDueDetails {
+            emi: p.emi.clone(),
+            due_principal: p.due_principal.clone(),
+            due_interest: p.due_interest.clone(),
+        })
     }
 }
 
