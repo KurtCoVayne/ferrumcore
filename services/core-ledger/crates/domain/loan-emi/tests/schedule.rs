@@ -172,6 +172,36 @@ fn disbursed_100_360_30_interest_period_granularity() {
     assert_eq!(model.periods[1].interest_periods.len(), 1);
 }
 
+/// `test_disbursedAmt1000_NoInterest_repayEvery1Month`: 1000 at 0% over 4 monthly periods (ACTUAL/ACTUAL) → equal
+/// principal of 250, zero interest, balance stepping to 0.
+#[test]
+fn disbursed_1000_no_interest() {
+    let periods: Vec<(Date, Date)> = (0..4)
+        .map(|i| {
+            (
+                first_of(2024, month_of(1 + i)),
+                first_of(2024, month_of(2 + i)),
+            )
+        })
+        .collect();
+    let model = generate_declining_balance(
+        &periods,
+        &bd("1000"),
+        &bd("0"),
+        DayCountKind::ActualActual,
+        2,
+        RoundingMode::HalfEven,
+    );
+    check_period(&model, 0, "250.00", "0.00", "250.00", "750.00");
+    check_period(&model, 1, "250.00", "0.00", "250.00", "500.00");
+    check_period(&model, 2, "250.00", "0.00", "250.00", "250.00");
+    check_period(&model, 3, "250.00", "0.00", "250.00", "0.00");
+    assert_eq!(
+        model.periods[0].interest_periods[0].rate_factor.to_string(),
+        "0"
+    );
+}
+
 /// Six monthly periods from 2024-01-01.
 fn monthly_periods_2024_six() -> Vec<(Date, Date)> {
     (0..6)
