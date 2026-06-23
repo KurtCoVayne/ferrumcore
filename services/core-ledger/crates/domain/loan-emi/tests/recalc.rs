@@ -1501,3 +1501,56 @@ fn change_interest_rate_with_prepaid_last_period() {
     check_rp(&model, 4, "16.79", "0.06", "16.73", "0.00");
     check_rp(&model, 5, "17.01", "0.00", "17.01", "0.00");
 }
+
+/// `test_reschedule_interest_on0215_4per_*`: a clean interest-rate change to 4% effective Feb 15 (− 1 day = Feb 14),
+/// no prior payments. Period 1 splits into Feb1-Feb14 @7% and Feb14-Mar1 @4%; the blended annuity EMI is a flat 16.90.
+#[test]
+fn change_interest_rate_clean() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    model.change_interest_rate(d(2024, Month::February, 15), &bd("4.0"));
+
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.005833333333",
+        "0.5833333333",
+        "0.58",
+        "16.43",
+        "83.57",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "16.90",
+        "0.002614942529",
+        "0.218530747114",
+        "0.37",
+        "16.53",
+        "67.04",
+    );
+    check_ip(
+        &model,
+        1,
+        1,
+        "16.90",
+        "0.001839080460",
+        "0.153691954042",
+        "0.37",
+        "16.53",
+        "67.04",
+    );
+    check_rp(&model, 2, "16.90", "0.22", "16.68", "50.36");
+    check_rp(&model, 3, "16.90", "0.17", "16.73", "33.63");
+    check_rp(&model, 4, "16.90", "0.11", "16.79", "16.84");
+    check_rp(&model, 5, "16.90", "0.06", "16.84", "0.00");
+}
