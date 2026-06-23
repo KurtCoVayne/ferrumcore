@@ -313,3 +313,36 @@ fn payoff_two_payments_with_balance_correction() {
         "0.00",
     );
 }
+
+/// `getDueAmounts(from, due, targetDate)` on the fresh model (the `repaymentDetails*` queries of `test_payoff_on0215_*`):
+/// interest accrues only up to the target date — period start → zero interest, period due → full, mid-period → prorated.
+#[test]
+fn payoff_get_due_amounts_fresh() {
+    let model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1);
+    let mar1 = d(2024, Month::March, 1);
+    let feb15 = d(2024, Month::February, 15);
+
+    // schedule 1st period 1st day → full principal, zero interest.
+    let a = model.get_due_amounts(jan1, feb1, jan1).unwrap();
+    assert_eq!(a.due_principal.to_plain_string(), "17.01");
+    assert_eq!(a.due_interest.to_plain_string(), "0.00");
+
+    // schedule 2nd period last day → full month interest.
+    let b = model.get_due_amounts(feb1, mar1, mar1).unwrap();
+    assert_eq!(b.due_principal.to_plain_string(), "16.52");
+    assert_eq!(b.due_interest.to_plain_string(), "0.49");
+
+    // 2nd period, mid-period payoff on Feb 15 → prorated interest, larger principal.
+    let c = model.get_due_amounts(feb1, mar1, feb15).unwrap();
+    assert_eq!(c.due_principal.to_plain_string(), "16.77");
+    assert_eq!(c.due_interest.to_plain_string(), "0.24");
+}

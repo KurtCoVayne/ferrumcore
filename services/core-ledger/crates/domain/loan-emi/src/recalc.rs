@@ -835,6 +835,149 @@ impl Model {
             .iter()
             .position(|p| p.from == from && p.due == due)
     }
+
+    /// `findRepaymentPeriod(targetDate)` — the period whose `isInPeriod(date, from, due, isFirstRepaymentPeriod)` holds.
+    fn find_period_containing(&self, date: Date) -> Option<usize> {
+        self.periods.iter().enumerate().position(|(idx, p)| {
+            if idx == 0 {
+                date >= p.from && date <= p.due
+            } else {
+                date > p.from && date <= p.due
+            }
+        })
+    }
+
+    /// `RepaymentPeriod.findInterestPeriod(targetDate)` — last interest period of `rp_idx` containing `date`
+    /// (`isInPeriod`, first-period-first-interest-period inclusive on the from side).
+    fn find_interest_period_in(&self, rp_idx: usize, date: Date) -> Option<usize> {
+        let ips = &self.periods[rp_idx].interest_periods;
+        let mut found = None;
+        for (k, ip) in ips.iter().enumerate() {
+            let inclusive_from = rp_idx == 0 && k == 0;
+            let in_period = if inclusive_from {
+                date >= ip.from && date <= ip.due
+            } else {
+                date > ip.from && date <= ip.due
+            };
+            if in_period {
+                found = Some(k);
+            }
+        }
+        found
+    }
+
+    /// `recalculateScheduleModelTillDate` — a deep copy with interest periods clipped to `target` (so interest accrues
+    /// only up to the target date), then rate factors / outstanding balances / tail EMI recomputed.
+    fn recalculate_till_date(&self, target: Date) -> Model {
+        let mut copy = self.clone();
+        let first_from = copy.periods.first().map(|p| p.from);
+        let last_due = copy.periods.last().map(|p| p.due);
+        let before_first = first_from.is_some_and(|f| target < f);
+        let after_maturity = last_due.is_some_and(|l| target >= l);
+        if before_first {
+            for rp in &mut copy.periods {
+                rp.interest_periods.clear();
+            }
+            return copy;
+        }
+        if after_maturity {
+            return copy;
+        }
+        let Some(target_rp) = copy.find_period_containing(target) else {
+            return copy;
+        };
+        for i in 0..copy.periods.len() {
+            if copy.periods[i].due <= target {
+                continue;
+            }
+            if i == target_rp {
+                if let Some(k) = copy.find_interest_period_in(i, target) {
+                    copy.periods[i].interest_periods[k].due = target;
+                    let next = k + 1;
+                    if copy.periods[i].interest_periods.len() > next {
+                        let (cp, ci) = {
+                            let n = &copy.periods[i].interest_periods[next];
+                            (n.credited_principal.clone(), n.credited_interest.clone())
+                        };
+                        let ip = &mut copy.periods[i].interest_periods[k];
+                        ip.credited_principal = ip.credited_principal.plus(&cp);
+                        ip.credited_interest = ip.credited_interest.plus(&ci);
+                    }
+                    copy.periods[i].interest_periods.truncate(next);
+                }
+            } else if i > 0
+                && i - 1 == target_rp
+                && copy.periods[i].interest_periods.first().is_some_and(|ip| {
+                    ip.credited_interest.is_greater_than_zero()
+                        || ip.credited_principal.is_greater_than_zero()
+                })
+            {
+                let from = copy.periods[i].interest_periods[0].from;
+                copy.periods[i].interest_periods[0].due = from;
+                copy.periods[i].interest_periods.truncate(1);
+            } else {
+                copy.periods[i].interest_periods.clear();
+            }
+        }
+        copy.calculate_rate_factor_for_periods();
+        copy.calculate_outstanding_balance();
+        copy.calculate_last_unpaid_emi();
+        copy
+    }
+
+    fn total_outstanding_principal(&self) -> Money {
+        neg_to_zero(
+            &self
+                .total_due_principal()
+                .minus(&self.total_paid_principal()),
+            self.scale,
+            self.mode,
+        )
+    }
+
+    /// `adjustEmiIfRequired` (horizontal) — mutate the period's EMI for the due-amount query when the target date is on
+    /// or before the period's start.
+    fn adjust_emi_if_required(&mut self, rp_idx: usize, target: Date, not_fully_repaid: usize) {
+        if target > self.periods[rp_idx].from {
+            return;
+        }
+        if not_fully_repaid > 1 {
+            self.periods[rp_idx].emi = self.periods[rp_idx].original_emi.clone();
+            let emi_adjustment = neg_to_zero(
+                &self
+                    .outstanding_principal(rp_idx)
+                    .minus(&self.total_outstanding_principal()),
+                self.scale,
+                self.mode,
+            );
+            self.periods[rp_idx].emi = self.periods[rp_idx].emi.minus(&emi_adjustment);
+            return;
+        }
+        if self.is_fully_paid(rp_idx) && not_fully_repaid == 1 {
+            let candidate = self
+                .total_due_principal()
+                .minus(&self.total_paid_principal())
+                .plus(&self.periods[rp_idx].paid_principal)
+                .plus(&self.due_interest(rp_idx));
+            self.periods[rp_idx].emi = money_min(&self.periods[rp_idx].original_emi, &candidate);
+        }
+    }
+
+    /// `getDueAmounts(periodFromDate, periodDueDate, targetDate)` for the horizontal (default) processing type.
+    #[must_use]
+    pub fn get_due_amounts(&self, from: Date, due: Date, target: Date) -> Option<PeriodDueDetails> {
+        let mut recalc = self.recalculate_till_date(target);
+        let rp_idx = recalc.find_repayment_period(from, due)?;
+        let not_fully_repaid = (0..recalc.periods.len())
+            .filter(|&i| !recalc.is_fully_paid(i))
+            .count();
+        recalc.adjust_emi_if_required(rp_idx, target, not_fully_repaid);
+        Some(PeriodDueDetails {
+            emi: recalc.period_emi(rp_idx),
+            due_principal: recalc.due_principal(rp_idx),
+            due_interest: recalc.due_interest(rp_idx),
+        })
+    }
 }
 
 /// Build a fresh declining-balance model for DAYS_360 / DAYS_30 and apply the initial disbursement — equivalent to
