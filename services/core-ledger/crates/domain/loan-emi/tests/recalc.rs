@@ -1983,3 +1983,59 @@ fn reage_equal_amortization_preserves_outstanding() {
         "outstanding interest unchanged by re-age"
     );
 }
+
+/// Re-age invariant **after payments** (the assertion in `test_transactionInMiddleOfPeriod_EQUAL_AMORTIZATION_FULL_INTEREST`,
+/// which the recalc day-count enum can't model exactly, but the invariant is day-count/payment-agnostic): re-aging a
+/// partially-paid loan still leaves the *remaining* total outstanding unchanged. Periods 0 and 1 are repaid, then the
+/// loan is re-aged on Apr 15 into 6 installments — stresses calculate_paid_balances_after_date +
+/// create_repayment_period_for_early_repaid with non-zero paid amounts.
+#[test]
+fn reage_after_payments_preserves_outstanding() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1);
+    let mar1 = d(2024, Month::March, 1);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    model.pay_principal(jan1, feb1, feb1, &m("16.43"));
+    model.pay_interest(jan1, feb1, feb1, &m("0.58"));
+    model.pay_principal(feb1, mar1, mar1, &m("16.52"));
+    model.pay_interest(feb1, mar1, mar1, &m("0.49"));
+
+    let maturity_before = model.periods.last().unwrap().due;
+    let (p_before, i_before) = model.get_outstanding_amounts_till_date(maturity_before);
+    // sanity: 2 of 6 periods repaid, so outstanding principal < 100.
+    assert_eq!(
+        p_before.to_plain_string(),
+        "67.05",
+        "outstanding principal after 2 payments"
+    );
+
+    model.re_age_equal_amortization(
+        d(2024, Month::April, 15),
+        d(2024, Month::April, 20),
+        6,
+        1,
+        true,
+    );
+
+    let maturity_after = model.periods.last().unwrap().due;
+    let (p_after, i_after) = model.get_outstanding_amounts_till_date(maturity_after);
+    assert_eq!(
+        p_after.to_plain_string(),
+        p_before.to_plain_string(),
+        "outstanding principal unchanged by re-age (after payments)"
+    );
+    assert_eq!(
+        i_after.to_plain_string(),
+        i_before.to_plain_string(),
+        "outstanding interest unchanged by re-age (after payments)"
+    );
+}
