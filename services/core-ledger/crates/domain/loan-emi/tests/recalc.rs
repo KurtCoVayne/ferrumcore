@@ -916,3 +916,108 @@ fn single_interest_pause() {
         "0.00",
     );
 }
+
+/// `test_interestPauseBetweenTwoPeriodsAmt100_*`: a pause Feb 10 – Mar 10 spans periods 1 and 2, splitting each into a
+/// real + paused interest period. Confirms `apply_interest_pause` handles a multi-period pause (clamping the window to
+/// each period and skipping the boundary insert when an interest period already starts/ends there).
+#[test]
+fn interest_pause_between_two_periods() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    model.apply_interest_pause(d(2024, Month::February, 10), d(2024, Month::March, 10));
+
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.005833333333",
+        "0.5833333333",
+        "0.58",
+        "16.43",
+        "83.57",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.001609195402",
+        "0.134480459762",
+        "0.13",
+        "16.88",
+        "66.69",
+    );
+    check_ip(
+        &model,
+        1,
+        1,
+        "17.01",
+        "0.004224137931",
+        "0.0",
+        "0.13",
+        "16.88",
+        "66.69",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.001693548387",
+        "0.0",
+        "0.28",
+        "16.73",
+        "49.96",
+    );
+    check_ip(
+        &model,
+        2,
+        1,
+        "17.01",
+        "0.004139784946",
+        "0.276082258049",
+        "0.28",
+        "16.73",
+        "49.96",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.291433333317",
+        "0.29",
+        "16.72",
+        "33.24",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.193899999989",
+        "0.19",
+        "16.82",
+        "16.42",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "16.52",
+        "0.005833333333",
+        "0.095783333328",
+        "0.10",
+        "16.42",
+        "0.00",
+    );
+}
