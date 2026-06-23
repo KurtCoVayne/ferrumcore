@@ -67,6 +67,7 @@ fn repayment_schedule_360_30_month_end() {
             days_in_year: 360,
             days_in_month: 30,
             days_in_period: 30,
+            repay_every: 1,
         },
         2,
         RoundingMode::HalfUp,
@@ -77,6 +78,39 @@ fn repayment_schedule_360_30_month_end() {
     check_period(&model, 3, "420.31", "10.33", "409.98", "830.27");
     check_period(&model, 4, "420.31", "6.91", "413.40", "416.87");
     check_period(&model, 5, "420.34", "3.47", "416.87", "0.00");
+}
+
+/// `test_360_30_repayment_schedule_disbursement_repay_every_2_months`: 3333 @ 19.99% nominal, DAYS_360/DAYS_30,
+/// repay every 2 months, six periods, HALF_UP. Exact per-period golden.
+#[test]
+fn repayment_schedule_360_30_repay_every_2_months() {
+    let periods = [
+        (d(2023, Month::October, 29), d(2023, Month::December, 29)),
+        (d(2023, Month::December, 29), d(2024, Month::February, 29)),
+        (d(2024, Month::February, 29), d(2024, Month::April, 29)),
+        (d(2024, Month::April, 29), d(2024, Month::June, 29)),
+        (d(2024, Month::June, 29), d(2024, Month::August, 29)),
+        (d(2024, Month::August, 29), d(2024, Month::October, 29)),
+    ];
+    let model = generate_declining_balance(
+        &periods,
+        &bd("3333"),
+        &bd("19.99"),
+        DayCount {
+            days_in_year: 360,
+            days_in_month: 30,
+            days_in_period: 60,
+            repay_every: 2,
+        },
+        2,
+        RoundingMode::HalfUp,
+    );
+    check_period(&model, 0, "622.04", "111.04", "511.00", "2822.00");
+    check_period(&model, 1, "622.04", "94.02", "528.02", "2293.98");
+    check_period(&model, 2, "622.04", "76.43", "545.61", "1748.37");
+    check_period(&model, 3, "622.04", "58.25", "563.79", "1184.58");
+    check_period(&model, 4, "622.04", "39.47", "582.57", "602.01");
+    check_period(&model, 5, "622.07", "20.06", "602.01", "0.00");
 }
 
 /// 12 monthly periods from 2024-01-01.
@@ -111,6 +145,7 @@ fn day_count() -> DayCount {
         days_in_year: 360,
         days_in_month: 30,
         days_in_period: 30,
+        repay_every: 1,
     }
 }
 

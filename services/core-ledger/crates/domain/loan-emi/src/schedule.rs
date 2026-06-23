@@ -35,6 +35,8 @@ pub struct DayCount {
     pub days_in_month: i64,
     /// Days used as the period length in the rate factor (e.g. 30 for `DAYS_30`).
     pub days_in_period: i64,
+    /// `repayEvery` — the repayment-period multiplier (1 = monthly, 2 = every two months, …).
+    pub repay_every: i64,
 }
 
 /// The interest-schedule model.
@@ -100,11 +102,14 @@ pub fn generate_declining_balance(
     let dim = BigDecimal::from(day_count.days_in_month);
     let diy = BigDecimal::from(day_count.days_in_year);
     let dip = BigDecimal::from(day_count.days_in_period);
+    let repay_every = BigDecimal::from(day_count.repay_every);
 
     // Per-period rate factor (month-based), and (1 + rate factor) rounded to the MathContext (`.add(ONE, mc)`).
     let rate_factors: Vec<BigDecimal> = period_dates
         .iter()
-        .map(|_| rate_factor_by_repayment_every_month(&mc, &rate, &one, &dim, &diy, &dip, &dip))
+        .map(|_| {
+            rate_factor_by_repayment_every_month(&mc, &rate, &repay_every, &dim, &diy, &dip, &dip)
+        })
         .collect();
     let rfp1: Vec<BigDecimal> = rate_factors.iter().map(|rf| mc.add(rf, &one)).collect();
 
