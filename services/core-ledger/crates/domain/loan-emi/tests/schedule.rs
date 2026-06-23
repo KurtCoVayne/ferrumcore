@@ -15,6 +15,69 @@ fn bd(s: &str) -> BigDecimal {
 fn first_of(year: i32, month: Month) -> Date {
     Date::from_calendar_date(year, month, 1).unwrap()
 }
+fn d(year: i32, month: Month, day: u8) -> Date {
+    Date::from_calendar_date(year, month, day).unwrap()
+}
+
+/// `checkPeriod(model, idx, emi, dueInterest, duePrincipal, outstanding)` from the original test.
+fn check_period(
+    model: &fc_loan_emi::Model,
+    idx: usize,
+    emi: &str,
+    due_interest: &str,
+    due_principal: &str,
+    outstanding: &str,
+) {
+    let p = &model.periods[idx];
+    assert_eq!(p.emi.to_plain_string(), emi, "period {idx} emi");
+    assert_eq!(
+        p.due_interest.to_plain_string(),
+        due_interest,
+        "period {idx} interest"
+    );
+    assert_eq!(
+        p.due_principal.to_plain_string(),
+        due_principal,
+        "period {idx} principal"
+    );
+    assert_eq!(
+        p.outstanding_balance.to_plain_string(),
+        outstanding,
+        "period {idx} outstanding"
+    );
+}
+
+/// `test_360_30_repayment_schedule_disbursement_month_end`: 2450 @ 9.99% nominal, DAYS_360/DAYS_30, six monthly
+/// (month-end) periods, **HALF_UP**. Exact per-period golden from the original `checkPeriod` assertions.
+#[test]
+fn repayment_schedule_360_30_month_end() {
+    let periods = [
+        (d(2023, Month::October, 31), d(2023, Month::November, 30)),
+        (d(2023, Month::November, 30), d(2023, Month::December, 31)),
+        (d(2023, Month::December, 31), d(2024, Month::January, 31)),
+        (d(2024, Month::January, 31), d(2024, Month::February, 29)),
+        (d(2024, Month::February, 29), d(2024, Month::March, 31)),
+        (d(2024, Month::March, 31), d(2024, Month::April, 30)),
+    ];
+    let model = generate_declining_balance(
+        &periods,
+        &bd("2450"),
+        &bd("9.99"),
+        DayCount {
+            days_in_year: 360,
+            days_in_month: 30,
+            days_in_period: 30,
+        },
+        2,
+        RoundingMode::HalfUp,
+    );
+    check_period(&model, 0, "420.31", "20.40", "399.91", "2050.09");
+    check_period(&model, 1, "420.31", "17.07", "403.24", "1646.85");
+    check_period(&model, 2, "420.31", "13.71", "406.60", "1240.25");
+    check_period(&model, 3, "420.31", "10.33", "409.98", "830.27");
+    check_period(&model, 4, "420.31", "6.91", "413.40", "416.87");
+    check_period(&model, 5, "420.34", "3.47", "416.87", "0.00");
+}
 
 /// 12 monthly periods from 2024-01-01.
 fn monthly_periods_2024() -> Vec<(Date, Date)> {
