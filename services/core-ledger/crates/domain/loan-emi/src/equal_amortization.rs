@@ -107,3 +107,27 @@ pub fn calculate_equal_amortization_values(
         }
     }
 }
+
+/// `ProgressiveEMICalculator.calculateAdjustedEqualAmortizationValues` (the `installmentAmountInMultiplesOf == null`
+/// case): an equal split of `total` whose per-installment `value` is reduced by `sum_of_other_equal_amortization_values`
+/// (the portion already covered by other components), with `adjustment = outstanding − value × numberOfInstallments`.
+#[must_use]
+pub fn calculate_adjusted_equal_amortization_values(
+    outstanding: &Money,
+    total: &Money,
+    sum_of_other_equal_amortization_values: &Money,
+    number_of_installments: i64,
+) -> EqualAmortizationValues {
+    let calculated = calculate_equal_amortization_values(total, number_of_installments);
+    let value = calculated
+        .value
+        .minus(sum_of_other_equal_amortization_values);
+    let adjustment =
+        outstanding.minus(&value.multiplied_by(&BigDecimal::from(number_of_installments)));
+    EqualAmortizationValues {
+        total_outstanding: outstanding.clone(),
+        number_of_installments,
+        value,
+        adjustment,
+    }
+}

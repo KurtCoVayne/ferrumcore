@@ -18,4 +18,7 @@
 
 pub mod equal_amortization;
 
-pub use equal_amortization::{EqualAmortizationValues, calculate_equal_amortization_values};
+pub use equal_amortization::{
+    EqualAmortizationValues, calculate_adjusted_equal_amortization_values,
+    calculate_equal_amortization_values,
+};

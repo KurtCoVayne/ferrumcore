@@ -5,7 +5,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code
 
 use bigdecimal::{BigDecimal, RoundingMode};
-use fc_loan_emi::{EqualAmortizationValues, calculate_equal_amortization_values};
+use fc_loan_emi::{
+    EqualAmortizationValues, calculate_adjusted_equal_amortization_values,
+    calculate_equal_amortization_values,
+};
 use fc_money::Money;
 
 const SCALE: i64 = 2;
@@ -86,6 +89,29 @@ fn add_rejects_mismatched_counts() {
     let a = eav("600", 3, "200", "0");
     let b = eav("300", 4, "75", "0");
     assert!(a.try_add(&b).is_err());
+}
+
+#[test]
+fn adjusted_split_reduces_value_by_other_components() {
+    // total 1000 / 3 = 333.33; value = 333.33 − 100 = 233.33; adjust = 900 − 233.33×3 = 200.01.
+    let r = calculate_adjusted_equal_amortization_values(
+        &money("900"),
+        &money("1000"),
+        &money("100"),
+        3,
+    );
+    assert_eq!(r.value.to_plain_string(), "233.33");
+    assert_eq!(r.adjustment.to_plain_string(), "200.01");
+    assert_eq!(r.total_outstanding.to_plain_string(), "900.00");
+}
+
+#[test]
+fn adjusted_split_even() {
+    // total 600 / 2 = 300; value = 300 − 50 = 250; adjust = 500 − 250×2 = 0.
+    let r =
+        calculate_adjusted_equal_amortization_values(&money("500"), &money("600"), &money("50"), 2);
+    assert_eq!(r.value.to_plain_string(), "250.00");
+    assert_eq!(r.adjustment.to_plain_string(), "0.00");
 }
 
 /// The degenerate negative-adjusted-value branch of `calculateValue`: installments are paid `value` until the total is
