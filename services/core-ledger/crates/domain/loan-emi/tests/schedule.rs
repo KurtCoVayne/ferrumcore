@@ -573,6 +573,37 @@ fn repayment_schedule_actual_actual_monthly_12th() {
     check_period(&model, 5, "17.13", "0.14", "16.99", "0.00");
 }
 
+/// `test_actual_actual_repayment_schedule_disbursement_near_month_end_repay_every_2_months`: 5000 @ 7%, ACTUAL/ACTUAL,
+/// six bi-monthly periods Oct-29-2022 → Oct-29-2023 (each crosses a year boundary), HALF_UP. EMI 867.68. Exercises the
+/// ACTUAL/ACTUAL partial split on bi-monthly periods (equals the simple form here since both years are 365 days).
+#[test]
+fn repayment_schedule_actual_actual_bimonthly() {
+    let periods = [
+        (d(2022, Month::October, 29), d(2022, Month::December, 29)),
+        (d(2022, Month::December, 29), d(2023, Month::February, 28)),
+        (d(2023, Month::February, 28), d(2023, Month::April, 29)),
+        (d(2023, Month::April, 29), d(2023, Month::June, 29)),
+        (d(2023, Month::June, 29), d(2023, Month::August, 29)),
+        (d(2023, Month::August, 29), d(2023, Month::October, 29)),
+    ];
+    let model = generate_declining_balance(
+        &periods,
+        &bd("5000"),
+        &bd("7"),
+        DayCountKind::ActualActual {
+            recognition_on_disbursement: false,
+        },
+        2,
+        RoundingMode::HalfUp,
+    );
+    check_period(&model, 0, "867.68", "58.49", "809.19", "4190.81");
+    check_period(&model, 1, "867.68", "49.03", "818.65", "3372.16");
+    check_period(&model, 2, "867.68", "38.80", "828.88", "2543.28");
+    check_period(&model, 3, "867.68", "29.75", "837.93", "1705.35");
+    check_period(&model, 4, "867.68", "19.95", "847.73", "857.62");
+    check_period(&model, 5, "867.65", "10.03", "857.62", "0.00");
+}
+
 /// Six monthly periods from 2024-01-01.
 fn monthly_periods_2024_six() -> Vec<(Date, Date)> {
     (0..6)
