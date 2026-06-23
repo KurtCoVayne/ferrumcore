@@ -19,6 +19,7 @@
 #![forbid(unsafe_code)]
 
 pub mod equal_amortization;
+pub mod interest_period;
 pub mod rate_factor;
 
 pub use equal_amortization::{
