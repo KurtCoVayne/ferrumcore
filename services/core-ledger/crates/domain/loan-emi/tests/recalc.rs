@@ -1646,3 +1646,41 @@ fn multi_disbursement_after_full_repay() {
         "period 5 EMI"
     );
 }
+
+/// `test_actual_actual_repayment_schedule_across_multiple_years_overdue`: 5000 @ 9.99% ACTUAL/ACTUAL, six monthly
+/// periods crossing 2023→2024. Each period's due principal is added back as a positive balance correction (overdue:
+/// nothing is actually paid down), so the outstanding stays 5000 throughout and the per-period interest varies with the
+/// month length; the last EMI grows to 960.01. Exercises getDueAmounts + addBalanceCorrection with positive amounts.
+#[test]
+fn overdue_principal_added_back_each_period() {
+    let periods = [
+        (d(2023, Month::November, 13), d(2023, Month::December, 13)),
+        (d(2023, Month::December, 13), d(2024, Month::January, 13)),
+        (d(2024, Month::January, 13), d(2024, Month::February, 13)),
+        (d(2024, Month::February, 13), d(2024, Month::March, 13)),
+        (d(2024, Month::March, 13), d(2024, Month::April, 13)),
+        (d(2024, Month::April, 13), d(2024, Month::May, 13)),
+    ];
+    let mut model = new_declining_balance_with_day_count(
+        &periods,
+        &bd("5000"),
+        &bd("9.99"),
+        DayCount::ActualActual {
+            recognition_on_disbursement: false,
+        },
+        2,
+        RoundingMode::HalfUp,
+    );
+    for &(from, due) in &periods {
+        let due_amounts = model.get_due_amounts(from, due, due).unwrap();
+        let dp = due_amounts.due_principal.clone();
+        model.add_balance_correction(due, &dp);
+    }
+
+    check_rp(&model, 0, "857.71", "41.05", "816.66", "5000.00");
+    check_rp(&model, 1, "857.71", "42.37", "815.34", "5000.00");
+    check_rp(&model, 2, "857.71", "42.31", "815.40", "5000.00");
+    check_rp(&model, 3, "857.71", "39.58", "818.13", "5000.00");
+    check_rp(&model, 4, "857.71", "42.31", "815.40", "5000.00");
+    check_rp(&model, 5, "960.01", "40.94", "919.07", "5000.00");
+}
