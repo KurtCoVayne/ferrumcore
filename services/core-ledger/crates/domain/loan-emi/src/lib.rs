@@ -24,8 +24,10 @@ pub mod equal_amortization;
 pub mod interest_period;
 pub mod math;
 pub mod rate_factor;
+pub mod schedule;
 
 pub use math::Mc;
+pub use schedule::{DayCount, Model, RepaymentPeriod, generate_declining_balance};
 
 pub use equal_amortization::{
     EqualAmortizationValues, calculate_adjusted_equal_amortization_values,
