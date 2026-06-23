@@ -538,6 +538,41 @@ fn feb29_period_only_s5() {
     check_period(&model, 5, "867.65", "10.03", "857.62", "0.00");
 }
 
+/// `test_disbursedAmt100_dayInYearsActual_daysInMonthActual_repayEvery1Month`: 100 @ 9.4822%, ACTUAL/ACTUAL, six
+/// monthly periods on the 12th from Dec-12-2023 (crossing 2023→2024, varying month lengths). EMI 17.13. Exercises the
+/// year-boundary partial split (rp0 Dec12-Jan12) at repayment- and interest-period granularity.
+#[test]
+fn repayment_schedule_actual_actual_monthly_12th() {
+    let periods = [
+        (d(2023, Month::December, 12), d(2024, Month::January, 12)),
+        (d(2024, Month::January, 12), d(2024, Month::February, 12)),
+        (d(2024, Month::February, 12), d(2024, Month::March, 12)),
+        (d(2024, Month::March, 12), d(2024, Month::April, 12)),
+        (d(2024, Month::April, 12), d(2024, Month::May, 12)),
+        (d(2024, Month::May, 12), d(2024, Month::June, 12)),
+    ];
+    let model = generate_declining_balance(
+        &periods,
+        &bd("100"),
+        &bd("9.4822"),
+        DayCountKind::ActualActual {
+            recognition_on_disbursement: false,
+        },
+        2,
+        RoundingMode::HalfEven,
+    );
+    assert_eq!(
+        fc_money::decimal::to_plain_string(&model.periods[0].interest_periods[1].rate_factor),
+        "0.008044857759"
+    );
+    check_period(&model, 0, "17.13", "0.80", "16.33", "83.67");
+    check_period(&model, 1, "17.13", "0.67", "16.46", "67.21");
+    check_period(&model, 2, "17.13", "0.50", "16.63", "50.58");
+    check_period(&model, 3, "17.13", "0.41", "16.72", "33.86");
+    check_period(&model, 4, "17.13", "0.26", "16.87", "16.99");
+    check_period(&model, 5, "17.13", "0.14", "16.99", "0.00");
+}
+
 /// Six monthly periods from 2024-01-01.
 fn monthly_periods_2024_six() -> Vec<(Date, Date)> {
     (0..6)
