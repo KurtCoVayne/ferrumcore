@@ -7,9 +7,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // test code
 
 use bigdecimal::{BigDecimal, RoundingMode};
-use fc_loan_allocation::{Allocation, Installment, PendingCharge, due_pen_int_pri_fee as strat};
+use fc_loan_allocation::strategy::due_pen_int_pri_fee::DuePenIntPriFee;
+use fc_loan_allocation::strategy::{allocate_in_advance, allocate_late, allocate_on_time};
+use fc_loan_allocation::{Allocation, Installment, PendingCharge, Txn};
 use fc_money::Money;
 use time::{Date, Month};
+
+const S: DuePenIntPriFee = DuePenIntPriFee;
 
 const SCALE: i64 = 2;
 const MODE: RoundingMode = RoundingMode::HalfEven;
@@ -72,11 +76,12 @@ fn charge_free_scenarios_from_golden() {
         let src = c[11];
 
         let mut inst = installment(p_out, i_out, f_out, pen_out);
-        let amount = money(txn);
         let got = match timing {
-            "IA" => strat::in_advance(&mut inst, txn_date(), &amount, &[]),
-            "OT" => strat::on_time(&mut inst, &amount),
-            "LATE" => strat::late(&mut inst, &amount),
+            "IA" => {
+                allocate_in_advance(&S, &mut inst, &Txn::repayment(txn_date(), money(txn)), &[])
+            }
+            "OT" => allocate_on_time(&S, &mut inst, &Txn::repayment(txn_date(), money(txn))),
+            "LATE" => allocate_late(&S, &mut inst, &Txn::repayment(late_date(), money(txn)), &[]),
             other => panic!("unknown timing {other}"),
         };
         assert_alloc(src, &got, ep, ei, ef, epen, eunproc);
@@ -111,7 +116,12 @@ fn in_advance_due_penalty() {
         },
     ];
     let mut inst = installment(3, 2, 2, 4);
-    let got = strat::in_advance(&mut inst, txn_date(), &money(10), &charges);
+    let got = allocate_in_advance(
+        &S,
+        &mut inst,
+        &Txn::repayment(txn_date(), money(10)),
+        &charges,
+    );
     assert_alloc(
         "duePaymentOfPenaltyAsInAdvanceTransaction",
         &got,
@@ -132,7 +142,12 @@ fn in_advance_due_penalty_and_fee() {
         charge(1, false, txn_date().previous_day().unwrap()),
     ];
     let mut inst = installment(2, 2, 2, 4);
-    let got = strat::in_advance(&mut inst, txn_date(), &money(10), &charges);
+    let got = allocate_in_advance(
+        &S,
+        &mut inst,
+        &Txn::repayment(txn_date(), money(10)),
+        &charges,
+    );
     assert_alloc(
         "duePaymentOfPenaltyAndFeeAsInAdvanceTransaction",
         &got,
@@ -153,7 +168,12 @@ fn in_advance_higher_due_penalty_and_fee() {
         charge(11, false, txn_date().previous_day().unwrap()),
     ];
     let mut inst = installment(2, 2, 2, 4);
-    let got = strat::in_advance(&mut inst, txn_date(), &money(10), &charges);
+    let got = allocate_in_advance(
+        &S,
+        &mut inst,
+        &Txn::repayment(txn_date(), money(10)),
+        &charges,
+    );
     assert_alloc(
         "duePaymentOfHigherPenaltyAndHigherFeeAsInAdvanceTransaction",
         &got,
@@ -171,6 +191,6 @@ fn in_advance_higher_due_penalty_and_fee() {
 fn late_date_is_after_due() {
     assert!(late_date() > due_date());
     let mut inst = installment(3, 2, 2, 4);
-    let got = strat::late(&mut inst, &money(10));
+    let got = allocate_late(&S, &mut inst, &Txn::repayment(late_date(), money(10)), &[]);
     assert_alloc("late_smoke", &got, 3, 2, 1, 4, 0);
 }
