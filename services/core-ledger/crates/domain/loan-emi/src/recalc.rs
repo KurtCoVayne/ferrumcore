@@ -131,6 +131,54 @@ fn money_max(a: &Money, b: &Money) -> Money {
         b.clone()
     }
 }
+fn money_abs(m: &Money, scale: i64, mode: RoundingMode) -> Money {
+    if m.is_less_than_zero() {
+        Money::zero(scale, mode).minus(m)
+    } else {
+        m.clone()
+    }
+}
+
+/// `EmiAdjustment` — the EMI imbalance between the last two not-fully-paid related periods, used by the cent-adjust loop.
+#[derive(Clone, Debug)]
+struct EmiAdj {
+    original_emi: Money,
+    emi_difference: Money,
+    num_related: usize,
+    uncountable: usize,
+    scale: i64,
+    mode: RoundingMode,
+}
+
+impl EmiAdj {
+    /// `shouldBeAdjusted`: `floor(n/2) > 0 && emiDifference != 0 && |emiDifference|×100 > originalEmi.copy(floor(n/2))`.
+    fn should_be_adjusted(&self) -> bool {
+        let lower_half = self.num_related / 2;
+        if lower_half == 0 || self.emi_difference.is_zero() {
+            return false;
+        }
+        let lhs = money_abs(&self.emi_difference, self.scale, self.mode)
+            .multiplied_by(&BigDecimal::from(100));
+        let rhs = Money::of(self.scale, self.mode, &BigDecimal::from(lower_half as i64));
+        lhs.is_greater_than(&rhs)
+    }
+
+    /// `adjustedEmi` = `originalEmi + emiDifference / max(1, n − uncountablePeriods)`.
+    fn adjusted_emi(&self) -> Money {
+        let divisor = self.num_related.saturating_sub(self.uncountable).max(1);
+        let adjustment = self
+            .emi_difference
+            .divided_by(&BigDecimal::from(divisor as i64));
+        self.original_emi.plus(&adjustment)
+    }
+
+    fn has_less_emi_difference(&self, prev: &EmiAdj) -> bool {
+        is_less_than(
+            &money_abs(&self.emi_difference, self.scale, self.mode),
+            &money_abs(&prev.emi_difference, prev.scale, prev.mode),
+        )
+    }
+}
 
 impl Model {
     fn money(&self, v: &BigDecimal) -> Money {
@@ -797,6 +845,7 @@ impl Model {
             self.calculate_emi_on_actual_model(related_start);
             self.calculate_outstanding_balance();
             self.calculate_last_unpaid_emi();
+            self.check_and_adjust_emi_if_needed(related_start);
         }
     }
 
@@ -1099,6 +1148,105 @@ impl Model {
                 .plus(&self.periods[rp_idx].paid_principal)
                 .plus(&self.due_interest(rp_idx));
             self.periods[rp_idx].emi = money_min(&self.periods[rp_idx].original_emi, &candidate);
+        }
+    }
+
+    /// `getEmiAdjustment(related)` — over the related periods `[start..]`, the EMI difference between the last two
+    /// not-fully-paid periods (scanning from the end); falls back to a zero difference on the first period.
+    fn get_emi_adjustment(&self, start: usize) -> EmiAdj {
+        let n = self.periods.len();
+        let num_related = n - start;
+        let mut idx = n - 1;
+        while idx > start {
+            if !self.is_fully_paid(idx) && !self.is_fully_paid(idx - 1) {
+                let original = self.periods[idx - 1].emi.clone();
+                let diff = self.periods[idx].emi.minus(&self.periods[idx - 1].emi);
+                let uncountable = self.get_uncountable_periods(start, &original);
+                return EmiAdj {
+                    original_emi: original,
+                    emi_difference: diff,
+                    num_related,
+                    uncountable,
+                    scale: self.scale,
+                    mode: self.mode,
+                };
+            }
+            idx -= 1;
+        }
+        EmiAdj {
+            original_emi: self.periods[start].emi.clone(),
+            emi_difference: self.zero(),
+            num_related,
+            uncountable: 0,
+            scale: self.scale,
+            mode: self.mode,
+        }
+    }
+
+    /// `getUncountablePeriods` — related periods whose total paid amount exceeds `original_emi`.
+    fn get_uncountable_periods(&self, start: usize, original_emi: &Money) -> usize {
+        (start..self.periods.len())
+            .filter(|&i| is_less_than(original_emi, &self.total_paid_amount(i)))
+            .count()
+    }
+
+    /// `checkAndAdjustEmiIfNeeded` — iteratively (≤3×) nudge the related periods' EMI toward balancing the last period,
+    /// keeping the change only while it strictly reduces the EMI difference.
+    fn check_and_adjust_emi_if_needed(&mut self, start: usize) {
+        let mut counter = 1;
+        while counter <= 3 {
+            let adj = self.get_emi_adjustment(start);
+            if !adj.should_be_adjusted() {
+                break;
+            }
+            let adjusted_emi = adj.adjusted_emi();
+            if is_equal_to(&adjusted_emi, &adj.original_emi) {
+                break;
+            }
+            let first_from = self.periods[start].from;
+            let first_due = self.periods[start].due;
+            let mut copy = self.clone();
+            for i in 0..copy.periods.len() {
+                if copy.periods[i].from >= first_from
+                    && copy.periods[i].due >= first_due
+                    && !is_less_than(&adjusted_emi, &copy.total_paid_amount(i))
+                {
+                    copy.periods[i].emi = adjusted_emi.clone();
+                    copy.periods[i].original_emi = adjusted_emi.clone();
+                }
+            }
+            copy.calculate_outstanding_balance();
+            copy.calculate_last_unpaid_emi();
+            if !copy.get_emi_adjustment(start).has_less_emi_difference(&adj) {
+                break;
+            }
+            for i in 0..self.periods.len() {
+                if self.periods[i].from >= first_from && self.periods[i].due >= first_due {
+                    self.periods[i].emi = copy.periods[i].emi.clone();
+                    self.periods[i].original_emi = copy.periods[i].emi.clone();
+                }
+            }
+            self.calculate_outstanding_balance();
+            counter += 1;
+        }
+    }
+
+    /// `changeInterestRate(date, newRatePct)` — the rate becomes `newRatePct` from `date − 1 day` onward; split the
+    /// affected period at the effective date and recompute rate factors + the annuity EMI over the related periods,
+    /// then run the EMI cent-adjust loop (declining balance, `onlyOnActualModelShouldApply`).
+    pub fn change_interest_rate(&mut self, date: Date, new_rate_pct: &BigDecimal) {
+        let effective = date - time::Duration::days(1);
+        let new_rate = self.mc.div(new_rate_pct, &BigDecimal::from(100));
+        self.interest_rates.push((effective, new_rate));
+        let zero = self.zero();
+        if let Some(rp_idx) = self.change_outstanding_and_split(effective, &zero, &zero, &zero) {
+            let start = self.related_start(self.effective_due_date(rp_idx, effective));
+            self.calculate_rate_factor_for_periods();
+            self.calculate_outstanding_balance();
+            self.calculate_emi_on_actual_model(start);
+            self.calculate_outstanding_balance();
+            self.calculate_last_unpaid_emi();
+            self.check_and_adjust_emi_if_needed(start);
         }
     }
 

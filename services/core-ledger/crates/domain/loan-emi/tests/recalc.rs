@@ -1435,3 +1435,69 @@ fn chargeback_partial_then_full() {
         "0.00",
     );
 }
+
+/// `test_reschedule_interest_on0120_*`: pay the last period early (17.01 on Jan 15), then change the interest rate to
+/// 4% effective Jan 20 (− 1 day = Jan 19). Period 0 ends up with 4 interest periods (stub, Jan1-Jan15 @7%,
+/// Jan15-Jan19 @7%, Jan19-Feb1 @4%); the annuity EMI + cent-adjust loop settle at 16.80 and the pre-paid last period
+/// stays at 17.01. Exercises change_interest_rate (variable rate) + the getEmiAdjustment cent-adjust loop.
+#[test]
+fn change_interest_rate_with_prepaid_last_period() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let jun1 = d(2024, Month::June, 1);
+    let jul1 = d(2024, Month::July, 1);
+    let jan15 = d(2024, Month::January, 15);
+    let jan20 = d(2024, Month::January, 20);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    model.pay_principal(jun1, jul1, jan15, &m("17.01"));
+    model.change_interest_rate(jan20, &bd("4.0"));
+
+    check_ip(
+        &model, 0, 0, "16.80", "0.0", "0.0", "0.44", "16.36", "66.63",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "16.80",
+        "0.002634408602",
+        "0.2634408602",
+        "0.44",
+        "16.36",
+        "66.63",
+    );
+    check_ip(
+        &model,
+        0,
+        2,
+        "16.80",
+        "0.000752688172",
+        "0.0624655913944",
+        "0.44",
+        "16.36",
+        "66.63",
+    );
+    check_ip(
+        &model,
+        0,
+        3,
+        "16.80",
+        "0.001397849462",
+        "0.116007526851",
+        "0.44",
+        "16.36",
+        "66.63",
+    );
+    check_rp(&model, 1, "16.80", "0.22", "16.58", "50.05");
+    check_rp(&model, 2, "16.80", "0.17", "16.63", "33.42");
+    check_rp(&model, 3, "16.80", "0.11", "16.69", "16.73");
+    check_rp(&model, 4, "16.79", "0.06", "16.73", "0.00");
+    check_rp(&model, 5, "17.01", "0.00", "17.01", "0.00");
+}
