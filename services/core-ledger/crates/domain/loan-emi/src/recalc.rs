@@ -1048,6 +1048,74 @@ impl Model {
         }
     }
 
+    /// `applyInterestPause(fromDate, endDate)` — pause interest accrual over `[fromDate, endDate)`: split the affected
+    /// repayment period(s) at the pause boundaries and mark the inner interest period paused (its rate factor is still
+    /// computed but its calculated due interest is zero), then recompute rate factors / outstanding / tail EMI (the EMI
+    /// annuity is NOT recomputed — only the last-unpaid-period diff adjustment).
+    pub fn apply_interest_pause(&mut self, from: Date, end: Date) {
+        if self
+            .update_interest_periods_for_interest_pause(from, end)
+            .is_some()
+        {
+            self.calculate_rate_factor_for_periods();
+            self.calculate_outstanding_balance();
+            self.calculate_last_unpaid_emi();
+        }
+    }
+
+    /// `updateInterestPeriodsForInterestPause` — insert pause boundaries into every repayment period overlapping
+    /// `[fromDate, endDate)` and return the first affected period.
+    fn update_interest_periods_for_interest_pause(
+        &mut self,
+        from: Date,
+        end: Date,
+    ) -> Option<usize> {
+        let affected: Vec<usize> = (0..self.periods.len())
+            .filter(|&i| self.periods[i].from < end && self.periods[i].due >= from)
+            .collect();
+        for &i in &affected {
+            self.insert_interest_pause_periods(i, from, end);
+        }
+        affected.first().copied()
+    }
+
+    /// `insertInterestPausePeriods` — clamp the pause window to the period and split at `pauseStart−1` / `pauseEnd`.
+    fn insert_interest_pause_periods(&mut self, rp_idx: usize, pause_start: Date, pause_end: Date) {
+        let effective_start = pause_start - time::Duration::days(1);
+        let rp_from = self.periods[rp_idx].from;
+        let rp_due = self.periods[rp_idx].due;
+        let final_start = if effective_start < rp_from {
+            rp_from
+        } else {
+            effective_start
+        };
+        let final_end = if pause_end > rp_due {
+            rp_due
+        } else {
+            pause_end
+        };
+        let zero = self.zero();
+        if !self.periods[rp_idx]
+            .interest_periods
+            .iter()
+            .any(|ip| ip.from == final_start)
+        {
+            self.insert_interest_period(rp_idx, final_start, &zero, &zero, &zero);
+        }
+        if !self.periods[rp_idx]
+            .interest_periods
+            .iter()
+            .any(|ip| ip.due == final_end)
+        {
+            self.insert_interest_period(rp_idx, final_end, &zero, &zero, &zero);
+        }
+        for ip in &mut self.periods[rp_idx].interest_periods {
+            if ip.from >= final_start && ip.due <= final_end {
+                ip.is_paused = true;
+            }
+        }
+    }
+
     /// `getDueAmounts(periodFromDate, periodDueDate, targetDate)` for the horizontal (default) processing type.
     #[must_use]
     pub fn get_due_amounts(&self, from: Date, due: Date, target: Date) -> Option<PeriodDueDetails> {
