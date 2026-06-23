@@ -60,6 +60,11 @@ pub enum DayCountKind {
     /// ACTUAL / ACTUAL. The year-boundary split is at **Dec 31** normally, or at **Jan 1** of the next year when
     /// `recognition_on_disbursement` is set (`isInterestRecognitionOnDisbursementDate`).
     ActualActual { recognition_on_disbursement: bool },
+    /// ACTUAL days-in-month + ACTUAL days-in-year with the `FEB_29_PERIOD_ONLY` custom strategy: the days-in-year is
+    /// 366 only for a period whose `(from, due]` range contains a Feb 29, else 365. The year-boundary partial split
+    /// (Dec 31) is applied **only** when a year-crossing period also contains a Feb 29 (otherwise the simple
+    /// `rate × actualDays / daysInYear` form is used even across a year boundary).
+    ActualFeb29PeriodOnly,
     /// SAME_AS_REPAYMENT_PERIOD, monthly: `rate × repayEvery / 12` (independent of actual day counts).
     SameAsRepaymentMonths { repay_every: i64 },
 }
@@ -113,6 +118,16 @@ fn year_len(year: i32) -> i64 {
     } else {
         365
     }
+}
+
+/// `isPeriodContainsFeb29` (src line 1330): true when some leap year in `[from.year, due.year]` has its Feb 29
+/// in the half-open range `(from, due]` (`isDateInRangeFromExclusiveToInclusive`).
+fn period_contains_feb29(from: Date, due: Date) -> bool {
+    (from.year()..=due.year()).any(|year| {
+        year_len(year) == 366
+            && Date::from_calendar_date(year, Month::February, 29)
+                .is_ok_and(|leap_day| leap_day > from && leap_day <= due)
+    })
 }
 
 fn dec_31(year: i32, fallback: Date) -> Date {
@@ -191,6 +206,31 @@ fn period_rate_factor(
             &one,
             &one,
         ),
+        DayCountKind::ActualFeb29PeriodOnly => {
+            let contains_feb29 = period_contains_feb29(from, due);
+            // daysInYear = ACTUAL.getNumberOfDays(from) overridden to 365 when 366 but the period has no Feb 29.
+            let days_in_year = if year_len(from.year()) == 366 && !contains_feb29 {
+                365
+            } else {
+                year_len(from.year())
+            };
+            // Partial (Dec-31 split) only when crossing a year boundary AND the period contains a Feb 29.
+            if due.year() > from.year() && contains_feb29 {
+                let cpf = calculate_period_fractions(mc, from, due, false);
+                decimal::set_scale(&mc.mul(rate, &cpf), i64::from(mc.precision), mc.mode)
+            } else {
+                let days = (due - from).whole_days();
+                rate_factor_by_repayment_period(
+                    mc,
+                    rate,
+                    &BigDecimal::from(days),
+                    &one,
+                    &BigDecimal::from(days_in_year),
+                    &one,
+                    &one,
+                )
+            }
+        }
         DayCountKind::ActualActual {
             recognition_on_disbursement,
         } => {

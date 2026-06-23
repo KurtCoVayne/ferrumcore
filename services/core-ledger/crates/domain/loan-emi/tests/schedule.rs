@@ -342,6 +342,148 @@ fn principal_grace_360_30() {
     check_period(&model, 5, "25.35", "0.15", "25.20", "0.00");
 }
 
+/// `test_leap_year_only_actual_for_loan_S1`: 10000 @ 9.482%, ACTUAL/ACTUAL with `FEB_29_PERIOD_ONLY`, six monthly
+/// periods Dec-12-2023 → Jun-12-2024 (HALF_EVEN). No period both crosses a year *and* contains Feb 29, so every
+/// period uses the simple `rate × actualDays / daysInYear` form, with daysInYear = 366 only for the period that
+/// contains Feb 29 (Feb-12 → Mar-12). Exact per-period golden.
+#[test]
+fn feb29_period_only_s1() {
+    let periods = [
+        (d(2023, Month::December, 12), d(2024, Month::January, 12)),
+        (d(2024, Month::January, 12), d(2024, Month::February, 12)),
+        (d(2024, Month::February, 12), d(2024, Month::March, 12)),
+        (d(2024, Month::March, 12), d(2024, Month::April, 12)),
+        (d(2024, Month::April, 12), d(2024, Month::May, 12)),
+        (d(2024, Month::May, 12), d(2024, Month::June, 12)),
+    ];
+    let model = generate_declining_balance(
+        &periods,
+        &bd("10000"),
+        &bd("9.482"),
+        DayCountKind::ActualFeb29PeriodOnly,
+        2,
+        RoundingMode::HalfEven,
+    );
+    check_period(&model, 0, "1713.21", "80.53", "1632.68", "8367.32");
+    check_period(&model, 1, "1713.21", "67.38", "1645.83", "6721.49");
+    check_period(&model, 2, "1713.21", "50.50", "1662.71", "5058.78");
+    check_period(&model, 3, "1713.21", "40.74", "1672.47", "3386.31");
+    check_period(&model, 4, "1713.21", "26.39", "1686.82", "1699.49");
+    check_period(&model, 5, "1713.18", "13.69", "1699.49", "0.00");
+}
+
+/// `test_leap_year_only_actual_for_loan_S2`: 15000 @ 12%, `FEB_29_PERIOD_ONLY`, four monthly periods
+/// Jul-23-2024 → Nov-23-2024 — a leap year but **no period contains February**, so every period uses 365 days
+/// (the 366 override applies only to a period containing Feb 29). Exact per-period golden.
+#[test]
+fn feb29_period_only_s2() {
+    let periods = [
+        (d(2024, Month::July, 23), d(2024, Month::August, 23)),
+        (d(2024, Month::August, 23), d(2024, Month::September, 23)),
+        (d(2024, Month::September, 23), d(2024, Month::October, 23)),
+        (d(2024, Month::October, 23), d(2024, Month::November, 23)),
+    ];
+    let model = generate_declining_balance(
+        &periods,
+        &bd("15000"),
+        &bd("12.0"),
+        DayCountKind::ActualFeb29PeriodOnly,
+        2,
+        RoundingMode::HalfEven,
+    );
+    check_period(&model, 0, "3845.41", "152.88", "3692.53", "11307.47");
+    check_period(&model, 1, "3845.41", "115.24", "3730.17", "7577.30");
+    check_period(&model, 2, "3845.41", "74.74", "3770.67", "3806.63");
+    check_period(&model, 3, "3845.43", "38.80", "3806.63", "0.00");
+}
+
+/// `test_leap_year_only_actual_for_loan_S3`: 245000 @ 45%, `FEB_29_PERIOD_ONLY`, six month-end periods
+/// Oct-31-2023 → Apr-30-2024. Period 2 (Dec-31 → Jan-31) crosses the year but contains no Feb 29 (→ 365, simple
+/// form); period 3 (Jan-31 → Feb-29) contains Feb 29 within one year (→ 366). Exact per-period golden.
+#[test]
+fn feb29_period_only_s3() {
+    let periods = [
+        (d(2023, Month::October, 31), d(2023, Month::November, 30)),
+        (d(2023, Month::November, 30), d(2023, Month::December, 31)),
+        (d(2023, Month::December, 31), d(2024, Month::January, 31)),
+        (d(2024, Month::January, 31), d(2024, Month::February, 29)),
+        (d(2024, Month::February, 29), d(2024, Month::March, 31)),
+        (d(2024, Month::March, 31), d(2024, Month::April, 30)),
+    ];
+    let model = generate_declining_balance(
+        &periods,
+        &bd("245000"),
+        &bd("45.00"),
+        DayCountKind::ActualFeb29PeriodOnly,
+        2,
+        RoundingMode::HalfEven,
+    );
+    check_period(&model, 0, "46348.39", "9061.64", "37286.75", "207713.25");
+    check_period(&model, 1, "46348.39", "7938.63", "38409.76", "169303.49");
+    check_period(&model, 2, "46348.39", "6470.64", "39877.75", "129425.74");
+    check_period(&model, 3, "46348.39", "4614.77", "41733.62", "87692.12");
+    check_period(&model, 4, "46348.39", "3351.52", "42996.87", "44695.25");
+    check_period(&model, 5, "46348.36", "1653.11", "44695.25", "0.00");
+}
+
+/// `test_leap_year_only_actual_for_loan_S4`: 2450 @ 9.99%, `FEB_29_PERIOD_ONLY`, six month-end periods
+/// Oct-31-2024 → Apr-30-2025 — crosses a leap year into a non-leap year, no period contains Feb 29 (Feb-2025 is
+/// not leap), so every period uses 365 days. Exact per-period golden.
+#[test]
+fn feb29_period_only_s4() {
+    let periods = [
+        (d(2024, Month::October, 31), d(2024, Month::November, 30)),
+        (d(2024, Month::November, 30), d(2024, Month::December, 31)),
+        (d(2024, Month::December, 31), d(2025, Month::January, 31)),
+        (d(2025, Month::January, 31), d(2025, Month::February, 28)),
+        (d(2025, Month::February, 28), d(2025, Month::March, 31)),
+        (d(2025, Month::March, 31), d(2025, Month::April, 30)),
+    ];
+    let model = generate_declining_balance(
+        &periods,
+        &bd("2450"),
+        &bd("9.99"),
+        DayCountKind::ActualFeb29PeriodOnly,
+        2,
+        RoundingMode::HalfEven,
+    );
+    check_period(&model, 0, "420.24", "20.12", "400.12", "2049.88");
+    check_period(&model, 1, "420.24", "17.39", "402.85", "1647.03");
+    check_period(&model, 2, "420.24", "13.97", "406.27", "1240.76");
+    check_period(&model, 3, "420.24", "9.51", "410.73", "830.03");
+    check_period(&model, 4, "420.24", "7.04", "413.20", "416.83");
+    check_period(&model, 5, "420.25", "3.42", "416.83", "0.00");
+}
+
+/// `test_leap_year_only_actual_for_loan_S5`: 5000 @ 7%, `FEB_29_PERIOD_ONLY`, **repay every 2 months**, six
+/// bi-monthly periods Oct-29-2022 → Oct-29-2023 — no leap year at all (365 throughout). Confirms the actual/actual
+/// day-count ignores `repay_every`. Exact per-period golden.
+#[test]
+fn feb29_period_only_s5() {
+    let periods = [
+        (d(2022, Month::October, 29), d(2022, Month::December, 29)),
+        (d(2022, Month::December, 29), d(2023, Month::February, 28)),
+        (d(2023, Month::February, 28), d(2023, Month::April, 29)),
+        (d(2023, Month::April, 29), d(2023, Month::June, 29)),
+        (d(2023, Month::June, 29), d(2023, Month::August, 29)),
+        (d(2023, Month::August, 29), d(2023, Month::October, 29)),
+    ];
+    let model = generate_declining_balance(
+        &periods,
+        &bd("5000"),
+        &bd("7.00"),
+        DayCountKind::ActualFeb29PeriodOnly,
+        2,
+        RoundingMode::HalfEven,
+    );
+    check_period(&model, 0, "867.68", "58.49", "809.19", "4190.81");
+    check_period(&model, 1, "867.68", "49.03", "818.65", "3372.16");
+    check_period(&model, 2, "867.68", "38.80", "828.88", "2543.28");
+    check_period(&model, 3, "867.68", "29.75", "837.93", "1705.35");
+    check_period(&model, 4, "867.68", "19.95", "847.73", "857.62");
+    check_period(&model, 5, "867.65", "10.03", "857.62", "0.00");
+}
+
 /// Six monthly periods from 2024-01-01.
 fn monthly_periods_2024_six() -> Vec<(Date, Date)> {
     (0..6)
