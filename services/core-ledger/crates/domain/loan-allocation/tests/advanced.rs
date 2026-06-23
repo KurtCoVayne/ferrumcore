@@ -17,8 +17,10 @@
 use bigdecimal::{BigDecimal, RoundingMode};
 use fc_loan_allocation::Installment;
 use fc_loan_allocation::advanced::{
-    AdvancedInstallment, AllocationType, OriginalAllocation, calculate_chargeback_allocation_map,
-    handle_charge_payment, process_credit_transaction,
+    AdvancedInstallment, AllocationType, ChangedTransactionDetail, EmiCalculator, LoanTxnView,
+    OriginalAllocation, RelationType, ScheduleModel, TxnChange, TxnRelation,
+    calculate_chargeback_allocation_map, find_chargeback_original_transaction,
+    handle_charge_payment, handle_disbursement_with_emi, process_credit_transaction,
 };
 use fc_money::Money;
 use time::{Date, Month};
@@ -338,6 +340,89 @@ fn credit_chargeback_penalty_fee_principal_interest() {
     );
 }
 
+/// `testProcessCreditTransactionWithAllocationRulePrincipalAndInterestWithAdditionalInstallment`: two installments,
+/// the first regular (due 2022-12-20, on/before the txn date) and the second ADDITIONAL (due 2022-12-27). The
+/// chargeback (25 over [PRINCIPAL, PENALTY, FEE, INTEREST], original 10/0/20/5) credits the *additional* installment —
+/// the first is skipped (not additional and not due after the 2023-01-01 transaction date).
+#[test]
+fn credit_chargeback_to_additional_installment() {
+    let txn_date = date(2023, Month::January, 1);
+    let original = original_10_0_20_5();
+    let types = [
+        AllocationType::Principal,
+        AllocationType::Penalty,
+        AllocationType::Fee,
+        AllocationType::Interest,
+    ];
+
+    let zero_inst = |due| {
+        Installment::new(
+            SCALE,
+            MODE,
+            due,
+            BigDecimal::from(0),
+            BigDecimal::from(0),
+            BigDecimal::from(0),
+            BigDecimal::from(0),
+        )
+    };
+    let mut installments = [
+        AdvancedInstallment::new(zero_inst(date(2022, Month::December, 20)), false),
+        AdvancedInstallment::new(zero_inst(date(2022, Month::December, 27)), true),
+    ];
+
+    let r =
+        process_credit_transaction(&original, &types, txn_date, &money("25"), &mut installments);
+
+    assert_eq!(
+        r.credited_installment,
+        Some(1),
+        "credited installment index"
+    );
+    assert_eq!(
+        r.components.principal.to_plain_string(),
+        money("10").to_plain_string(),
+        "txn principal"
+    );
+    assert_eq!(
+        r.components.fee.to_plain_string(),
+        money("10").to_plain_string(),
+        "txn fee"
+    );
+    assert_eq!(
+        r.components.penalty.to_plain_string(),
+        money("5").to_plain_string(),
+        "txn penalty"
+    );
+    assert_eq!(
+        r.components.interest.to_plain_string(),
+        money("0").to_plain_string(),
+        "txn interest"
+    );
+
+    let inst = &installments[1];
+    assert_eq!(
+        inst.credited_principal().to_plain_string(),
+        money("10").to_plain_string(),
+        "credited principal"
+    );
+    assert_eq!(
+        inst.added_principal().to_plain_string(),
+        money("10").to_plain_string(),
+        "addToPrincipal"
+    );
+    assert_eq!(
+        inst.credited_fee().to_plain_string(),
+        money("10").to_plain_string(),
+        "credited fee"
+    );
+    assert_eq!(
+        inst.credited_penalty().to_plain_string(),
+        money("5").to_plain_string(),
+        "credited penalty"
+    );
+}
+
 /// Extra golden replaying the standalone `calculateChargebackAllocationMap` unit assertions (src line 641): the pure
 /// distribution math used by the chargeback path.
 #[test]
@@ -419,4 +504,202 @@ fn chargeback_allocation_map_unit_cases() {
     assert_eq!(r.fee.to_plain_string(), money("200").to_plain_string());
     assert_eq!(r.penalty.to_plain_string(), money("12").to_plain_string());
     assert_eq!(r.interest.to_plain_string(), money("100").to_plain_string());
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// findChargebackOriginalTransaction
+// ---------------------------------------------------------------------------------------------------------------------
+
+fn txn(key: u64, id: Option<i64>, relations: Vec<TxnRelation>) -> LoanTxnView {
+    LoanTxnView { key, id, relations }
+}
+/// A CHARGEBACK relation pointing to the transaction with key `to_key` / id `to_id`.
+fn chargeback_rel(to_id: Option<i64>, to_key: u64) -> TxnRelation {
+    TxnRelation {
+        relation_type: RelationType::Chargeback,
+        to_id,
+        to_key,
+    }
+}
+
+/// `testFindOriginalTransactionShouldFindOriginalInLoansTransactionWhenIdProvided`: the chargeback has id 123; the
+/// repayment in the loan whose CHARGEBACK relation points to it is the original.
+#[test]
+fn find_original_by_id_in_loan_transactions() {
+    let chargeback = txn(1, Some(123), vec![]);
+    let repayment1 = txn(2, None, vec![]);
+    let repayment2 = txn(3, None, vec![chargeback_rel(Some(123), 1)]);
+    let loan_txns = [chargeback.clone(), repayment1, repayment2];
+
+    let found = find_chargeback_original_transaction(&chargeback, &loan_txns, None);
+    assert_eq!(found, Ok(3));
+}
+
+/// `testFindOriginalTransactionThrowsRuntimeExceptionWhenIdProvidedAndRelationsAreMissing`: no relation points to the
+/// chargeback → the "must have an original transaction" error.
+#[test]
+fn find_original_missing_relations_errors() {
+    let chargeback = txn(1, Some(123), vec![]);
+    let repayment1 = txn(2, None, vec![]);
+    let repayment2 = txn(3, None, vec![]);
+    let loan_txns = [chargeback.clone(), repayment1, repayment2];
+
+    let found = find_chargeback_original_transaction(&chargeback, &loan_txns, None);
+    assert!(found.is_err());
+    assert_eq!(
+        found.unwrap_err().to_string(),
+        "Chargeback transaction must have an original transaction"
+    );
+}
+
+/// `testFindOriginalTransactionShouldFindOriginalInLoansTransactionFromTransactionCtxWhenIdIsNotProvided`: a replayed
+/// chargeback has no id; its original id (123) is recovered from the change set, then the repayment whose relation
+/// targets id 123 is found in the loan transactions.
+#[test]
+fn find_original_replayed_id_recovered_from_ctx() {
+    let chargeback_replayed = txn(10, None, vec![]);
+    let repayment1 = txn(2, None, vec![]);
+    // repayment2 relates to the original chargeback (id 123, key 99).
+    let repayment2 = txn(3, None, vec![chargeback_rel(Some(123), 99)]);
+    let loan_txns = [repayment1, repayment2];
+
+    let changed = ChangedTransactionDetail {
+        changes: vec![TxnChange {
+            old_id: Some(123),
+            new: chargeback_replayed.clone(),
+        }],
+    };
+
+    let found =
+        find_chargeback_original_transaction(&chargeback_replayed, &loan_txns, Some(&changed));
+    assert_eq!(found, Ok(3));
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Disbursement after maturity (EMI calculator seam)
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// A recording fake [`EmiCalculator`] that captures the interactions the original unit tests verify via Mockito.
+#[derive(Default)]
+struct RecordingCalc {
+    disbursements: Vec<(Date, String)>,
+    principal_pays: Vec<(Date, Date, Date, String)>,
+}
+impl EmiCalculator for RecordingCalc {
+    fn add_disbursement(&mut self, _model: &ScheduleModel, date: Date, amount: &Money) {
+        self.disbursements.push((date, amount.to_plain_string()));
+    }
+    fn pay_principal(
+        &mut self,
+        _model: &ScheduleModel,
+        period_from: Date,
+        period_due: Date,
+        pay_date: Date,
+        amount: &Money,
+    ) {
+        self.principal_pays
+            .push((period_from, period_due, pay_date, amount.to_plain_string()));
+    }
+    fn pay_interest(
+        &mut self,
+        _model: &ScheduleModel,
+        _period_from: Date,
+        _period_due: Date,
+        _pay_date: Date,
+        _amount: &Money,
+    ) {
+    }
+}
+
+/// `testDisbursementAfterMaturityDateWithEMICalculator`: a 500 disbursement on 2023-07-15, after the last scheduled
+/// installment's due date (2023-06-01). The EMI calculator receives `addDisbursement(model, 07-15, 500)`, and because
+/// no non-additional installment is still due, an N+1 additional installment is created carrying principal 500 due
+/// 07-15.
+#[test]
+fn disbursement_after_maturity_creates_additional_installment() {
+    let mk = |due, principal: &str| {
+        AdvancedInstallment::new(
+            Installment::new(
+                SCALE,
+                MODE,
+                due,
+                BigDecimal::parse_bytes(principal.as_bytes(), 10).unwrap(),
+                BigDecimal::from(10),
+                BigDecimal::from(0),
+                BigDecimal::from(0),
+            ),
+            false,
+        )
+    };
+    let mut installments = vec![
+        mk(date(2023, Month::February, 1), "200"),
+        mk(date(2023, Month::March, 1), "200"),
+        mk(date(2023, Month::June, 1), "600"),
+    ];
+
+    let model = ScheduleModel {
+        maturity_date: date(2023, Month::December, 31),
+    };
+    let mut calc = RecordingCalc::default();
+    let txn_date = date(2023, Month::July, 15);
+
+    let r = handle_disbursement_with_emi(
+        &mut calc,
+        &model,
+        &mut installments,
+        SCALE,
+        MODE,
+        txn_date,
+        &money("500"),
+    );
+
+    // EMI calculator received the disbursement.
+    assert_eq!(calc.disbursements.len(), 1, "addDisbursement called once");
+    assert_eq!(calc.disbursements[0].0, txn_date, "disbursement date");
+    assert_eq!(
+        calc.disbursements[0].1,
+        money("500").to_plain_string(),
+        "disbursement amount"
+    );
+
+    // An additional N+1 installment was created.
+    let created = r
+        .created_additional
+        .expect("additional installment created");
+    assert!(created.is_additional, "isAdditional");
+    assert_eq!(
+        created.due_date(),
+        txn_date,
+        "due date == disbursement date"
+    );
+    assert_eq!(
+        created
+            .installment()
+            .principal_outstanding()
+            .to_plain_string(),
+        money("500").to_plain_string(),
+        "principal == disbursement amount"
+    );
+    assert_eq!(installments.len(), 4, "installment appended to schedule");
+}
+
+/// `...FallbackToPersistedTransactions`: same recovery, but the matching repayment is only in the persisted loan
+/// transactions (not in the change set), so the lookup falls back to them.
+#[test]
+fn find_original_replayed_fallback_to_persisted() {
+    let chargeback_replayed = txn(10, None, vec![]);
+    let repayment1 = txn(2, None, vec![]);
+    let repayment2 = txn(3, None, vec![chargeback_rel(Some(123), 99)]);
+    let loan_txns = [repayment1, repayment2];
+
+    let changed = ChangedTransactionDetail {
+        changes: vec![TxnChange {
+            old_id: Some(123),
+            new: chargeback_replayed.clone(),
+        }],
+    };
+
+    let found =
+        find_chargeback_original_transaction(&chargeback_replayed, &loan_txns, Some(&changed));
+    assert_eq!(found, Ok(3));
 }

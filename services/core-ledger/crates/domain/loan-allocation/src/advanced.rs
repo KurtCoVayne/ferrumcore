@@ -1,7 +1,9 @@
 //! Bounded slice of the progressive `AdvancedPaymentScheduleTransactionProcessor`
 //! (`fineract-progressive-loan/.../transactionprocessor/impl/AdvancedPaymentScheduleTransactionProcessor.java`).
 //!
-//! Only the behaviors asserted by `AdvancedPaymentScheduleTransactionProcessorTest` are ported here:
+//! The behaviors asserted by `AdvancedPaymentScheduleTransactionProcessorTest` are ported here (12 of its 13 tests —
+//! all but `testProcessLatestTransaction_PassesThroughHandlingPaymentAllocationForInterestBearingProgressiveLoan`,
+//! which needs the full progressive payment-allocation engine; see the out-of-scope note):
 //!
 //! 1. **Charge payment** (`handleChargePayment`, src line 2368) — a single loan charge paid against the (single) due
 //!    installment, fully or partially. Mirrors `payFeeChargesComponent` / `payPenaltyChargesComponent`, the
@@ -10,18 +12,24 @@
 //!    `calculateChargebackAllocationMap` src line 1345 and `recognizeAmountsAfterChargeback` src line 1313) — splits
 //!    the chargeback amount across PRINCIPAL/INTEREST/FEE/PENALTY in the credit-allocation-rule order, capped by the
 //!    original transaction's portions, then credits the matching installment (`addToCreditedPrincipal` /
-//!    `addToCreditedFee` / `addToCreditedPenalty` and `addToPrincipal`).
+//!    `addToCreditedFee` / `addToCreditedPenalty` and `addToPrincipal`), incl. crediting an **additional** (N+1)
+//!    installment when no regular row is still due.
+//! 3. **`findChargebackOriginalTransaction`** (src line 1002) — locating the repayment a chargeback reverses, by id,
+//!    via the reverse-replay change set, or falling back to the loan's persisted transactions.
+//! 4. **Disbursement after maturity** (`handleDisbursementWithEMICalculator`, src line 1646) — handing the
+//!    disbursement to the [`EmiCalculator`] seam and creating the N+1 **additional** installment.
 //!
-//! **Out of scope** (the rest of the 4296-line processor): interest-recalculation EMI path
-//! (`processCreditTransactionWithEmiCalculator`), the default/no-custom-rule credit path
-//! (`super.processCreditTransaction`), `adjustOriginalAllocationWithFormerChargebacks` for *prior* chargebacks (the
-//! tests have none, so the original allocation passes through unchanged), N+1 additional-installment creation,
-//! multi-installment driver `processLatestTransaction`, overpayment allocation, and charge reprocessing. The
-//! credited-* / `addToPrincipal` effects are modeled on a local [`AdvancedInstallment`] view (the shared
-//! `installment.rs` is intentionally not extended).
+//! **Out of scope** (the rest of the 4296-line processor + the EMI engine it drives): the progressive
+//! payment-allocation engine (`processTransaction` → `processPeriodsHorizontally`/`Vertically` → `processPayment
+//! Allocation` + payable-details), the interest-recalculation EMI path (`processCreditTransactionWithEmiCalculator`),
+//! re-age / re-amortize / capitalized-income, `adjustOriginalAllocationWithFormerChargebacks` for *prior* chargebacks,
+//! overpayment allocation, and charge reprocessing. The [`EmiCalculator`] is a **seam** (trait) here — its math lives
+//! in the separate progressive interest-schedule engine. The credited-* / `addToPrincipal` effects are modeled on a
+//! local [`AdvancedInstallment`] view (the shared `installment.rs` is intentionally not extended).
 
 use crate::installment::Installment;
 use bigdecimal::BigDecimal;
+use bigdecimal::RoundingMode;
 use fc_money::Money;
 use time::Date;
 
@@ -138,6 +146,12 @@ impl AdvancedInstallment {
     /// Borrow the underlying schedule installment (for the charge-payment `pay_*` atoms).
     pub fn installment_mut(&mut self) -> &mut Installment {
         &mut self.inner
+    }
+
+    /// Borrow the underlying schedule installment (read-only).
+    #[must_use]
+    pub fn installment(&self) -> &Installment {
+        &self.inner
     }
 
     /// Wrap a raw decimal as [`Money`] at this installment's currency scale/mode.
@@ -349,4 +363,205 @@ pub fn handle_charge_payment(
         penalty,
         unprocessed,
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// findChargebackOriginalTransaction (src line 1002)
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// A transaction's synthetic identity. The originals match relation targets both by object identity
+/// (`Objects.equals(getToTransaction(), tx)`) and by id (`Objects.equals(getToTransaction().getId(), id)`); this key
+/// models the former.
+pub type TxnKey = u64;
+
+/// The `LoanTransactionRelationTypeEnum` values the chargeback-origin lookup distinguishes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelationType {
+    /// `LoanTransactionRelationTypeEnum.CHARGEBACK`.
+    Chargeback,
+    /// Any other relation type (ignored by the lookup).
+    Other,
+}
+
+/// A `LoanTransactionRelation` (subset): its type and the transaction it points *to*.
+#[derive(Clone, Debug)]
+pub struct TxnRelation {
+    pub relation_type: RelationType,
+    /// `getToTransaction().getId()` — the target's id (may be `None`).
+    pub to_id: Option<i64>,
+    /// The target's identity (`getToTransaction()`), for the `Objects.equals(getToTransaction(), tx)` match.
+    pub to_key: TxnKey,
+}
+
+/// A `LoanTransaction` view sufficient for chargeback-origin lookup.
+#[derive(Clone, Debug)]
+pub struct LoanTxnView {
+    /// Identity (`equals`).
+    pub key: TxnKey,
+    /// `getId()` — `None` during reverse-replay before the transaction is persisted.
+    pub id: Option<i64>,
+    /// `getLoanTransactionRelations()`.
+    pub relations: Vec<TxnRelation>,
+}
+
+/// A `TransactionChangeData` (old → new) within `ChangedTransactionDetail`.
+#[derive(Clone, Debug)]
+pub struct TxnChange {
+    /// `getOldTransaction().getId()` (the pre-replay id of the changed transaction).
+    pub old_id: Option<i64>,
+    /// `getNewTransaction()`.
+    pub new: LoanTxnView,
+}
+
+/// `ChangedTransactionDetail.getTransactionChanges()`.
+#[derive(Clone, Debug, Default)]
+pub struct ChangedTransactionDetail {
+    pub changes: Vec<TxnChange>,
+}
+
+/// Error mirroring the `RuntimeException("Chargeback transaction must have an original transaction")`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NoOriginalTransaction;
+
+impl core::fmt::Display for NoOriginalTransaction {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Chargeback transaction must have an original transaction")
+    }
+}
+impl std::error::Error for NoOriginalTransaction {}
+
+/// `hasMatchingToLoanTransaction` (src line 1365/1369): a relation is a match if it is a CHARGEBACK relation whose
+/// target equals `to_id` by id (`Objects.equals`, so `None == None` matches) **or** equals `chargeback_key` by
+/// identity.
+fn matches_chargeback(tr: &LoanTxnView, to_id: Option<i64>, chargeback_key: TxnKey) -> bool {
+    tr.relations.iter().any(|r| {
+        r.relation_type == RelationType::Chargeback
+            && (r.to_id == to_id || r.to_key == chargeback_key)
+    })
+}
+
+/// `findChargebackOriginalTransaction` (src line 1002): find the repayment a chargeback reverses.
+///
+/// The chargeback's id is used as the match key; during reverse-replay the chargeback has no id, so it is recovered
+/// from `changed` (the `old_id` of the change whose `new` is this chargeback). The changed-transaction set is searched
+/// first, then the loan's persisted transactions. Returns the original transaction's [`TxnKey`], or
+/// [`NoOriginalTransaction`] if none matches.
+pub fn find_chargeback_original_transaction(
+    chargeback: &LoanTxnView,
+    loan_transactions: &[LoanTxnView],
+    changed: Option<&ChangedTransactionDetail>,
+) -> Result<TxnKey, NoOriginalTransaction> {
+    let mut chargeback_id = chargeback.id;
+    if let Some(detail) = changed {
+        if chargeback_id.is_none() {
+            chargeback_id = detail
+                .changes
+                .iter()
+                .find(|c| c.new.key == chargeback.key)
+                .and_then(|c| c.old_id);
+        }
+        let to_id = chargeback_id;
+        if let Some(from) = detail
+            .changes
+            .iter()
+            .map(|c| &c.new)
+            .find(|tr| matches_chargeback(tr, to_id, chargeback.key))
+        {
+            return Ok(from.key);
+        }
+    }
+    let to_id = chargeback_id;
+    loan_transactions
+        .iter()
+        .find(|tr| matches_chargeback(tr, to_id, chargeback.key))
+        .map(|tr| tr.key)
+        .ok_or(NoOriginalTransaction)
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// EMI-calculator seam + disbursement (handleDisbursementWithEMICalculator, src line 1646)
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// Minimal view of `ProgressiveLoanInterestScheduleModel` — only what the ported orchestration reads/passes. The full
+/// progressive interest schedule model (repayment periods, interest periods) lives in the (separate) EMI engine.
+#[derive(Clone, Debug)]
+pub struct ScheduleModel {
+    pub maturity_date: Date,
+}
+
+/// The progressive interest engine (`EMICalculator`) the Advanced processor delegates to. Modeled as a trait *seam* so
+/// the processor orchestration can be ported and verified exactly as the original unit tests do — by mocking the
+/// calculator and asserting the interactions. The engine's own math (re-amortize / re-age / interest periods) is a
+/// separate subsystem and is intentionally **not** implemented here.
+pub trait EmiCalculator {
+    /// `emiCalculator.addDisbursement(model, date, amount)`.
+    fn add_disbursement(&mut self, model: &ScheduleModel, date: Date, amount: &Money);
+    /// `emiCalculator.payPrincipal(model, repaymentPeriodFromDate, repaymentPeriodDueDate, payDate, amount)`.
+    fn pay_principal(
+        &mut self,
+        model: &ScheduleModel,
+        period_from: Date,
+        period_due: Date,
+        pay_date: Date,
+        amount: &Money,
+    );
+    /// `emiCalculator.payInterest(model, repaymentPeriodFromDate, repaymentPeriodDueDate, payDate, amount)`.
+    fn pay_interest(
+        &mut self,
+        model: &ScheduleModel,
+        period_from: Date,
+        period_due: Date,
+        pay_date: Date,
+        amount: &Money,
+    );
+}
+
+/// The outcome of [`handle_disbursement_with_emi`]: the additional ("N+1") installment created when the disbursement
+/// falls on/after the last scheduled installment's due date (for assertion), if any.
+#[derive(Clone, Debug)]
+pub struct DisbursementResult {
+    pub created_additional: Option<AdvancedInstallment>,
+}
+
+/// `handleDisbursementWithEMICalculator` (src line 1646) for the tested configuration: **no** down payment and **no**
+/// `installmentAmountInMultiplesOf`, so the amortizable amount equals the full disbursement. The disbursement is handed
+/// to the EMI calculator, and when no non-additional installment is still due on/after the transaction date an N+1
+/// **additional** installment is created carrying the amortizable principal (Java lines 1672-1689).
+///
+/// The downstream `recalculateRepaymentPeriodsWithEMICalculation` + `allocateOverpayment` (Java lines 1692-1694) are the
+/// EMI-engine's schedule rewrite and are out of scope for this orchestration slice (the engine is a seam here).
+pub fn handle_disbursement_with_emi(
+    calc: &mut dyn EmiCalculator,
+    model: &ScheduleModel,
+    installments: &mut Vec<AdvancedInstallment>,
+    scale: i64,
+    mode: RoundingMode,
+    txn_date: Date,
+    disbursement_amount: &Money,
+) -> DisbursementResult {
+    let amortizable = disbursement_amount.clone();
+    calc.add_disbursement(model, txn_date, &amortizable);
+
+    // needsNPlusOneInstallment: no non-additional, non-down-payment installment due on/after the transaction date.
+    let needs_n_plus_one = !installments
+        .iter()
+        .any(|i| !i.is_additional && i.due_date() >= txn_date);
+
+    let mut created_additional = None;
+    if needs_n_plus_one {
+        let inst = Installment::new(
+            scale,
+            mode,
+            txn_date,
+            amortizable.amount().clone(),
+            BigDecimal::from(0),
+            BigDecimal::from(0),
+            BigDecimal::from(0),
+        );
+        let additional = AdvancedInstallment::new(inst, true);
+        created_additional = Some(additional.clone());
+        installments.push(additional);
+    }
+
+    DisbursementResult { created_additional }
 }
