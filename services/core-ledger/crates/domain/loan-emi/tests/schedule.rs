@@ -966,10 +966,35 @@ fn same_as_repayment_month_repay_every_2_periods_8() {
     }
 }
 
-/// 2024-01-01 plus `2*k` months (clamped to month length), for the 2-month sameAsRepayment schedule above.
+/// 2024-01-01 plus `2*k` months, for the 2-month sameAsRepayment schedule above.
 fn add_months_2(k: i64) -> Date {
-    let total = (2 * k) as i64;
-    let base_month0 = 0i64 + total; // January = 0-based 0
+    add_months_1(2 * k)
+}
+
+/// `test_sameAsRepayment_month_repay_every_1_periods_20` (FLAT, SAME_AS_REPAYMENT_PERIOD): 1000 @ 12%, twenty monthly
+/// periods from 2024-01-01 — flat interest 10.00 per period (rate/12), EMI 60.00, equal principal 50.00.
+#[test]
+fn same_as_repayment_month_repay_every_1_periods_20() {
+    let periods: Vec<(Date, Date)> = (0..20)
+        .map(|i| (add_months_1(i), add_months_1(i + 1)))
+        .collect();
+    let model = generate_flat(
+        &periods,
+        &bd("1000"),
+        &bd("12.0"),
+        DayCountKind::SameAsRepaymentMonths { repay_every: 1 },
+        2,
+        RoundingMode::HalfEven,
+    );
+    for i in 0..20 {
+        let out = format!("{}.00", 950 - i * 50);
+        check_period(&model, i as usize, "60.00", "10.00", "50.00", &out);
+    }
+}
+
+/// 2024-01-01 plus `k` months, for the 20-period monthly sameAsRepayment schedule above.
+fn add_months_1(k: i64) -> Date {
+    let base_month0 = k;
     let year = 2024 + (base_month0 / 12) as i32;
     let month0 = (base_month0 % 12) as u8;
     let month = Month::try_from(month0 + 1).unwrap();
