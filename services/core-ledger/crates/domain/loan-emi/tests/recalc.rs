@@ -2435,3 +2435,49 @@ fn extra_terms_flat_add_repayment_periods() {
     check_rp(&model, 4, "121.11", "10.00", "111.11", "111.12");
     check_rp(&model, 5, "121.12", "10.00", "111.12", "0.00");
 }
+
+/// `test_dailyInterest_disbursedAmt2000_*` (checkPeriod block): single-period declining loan, 1000 disbursed Jan 1 then
+/// 1000 mid-period on Jan 15 — the 2nd disbursement splits period 0 into Jan1-Jan15 (1000) and Jan15-Feb1 (2000). EMI
+/// 2009.03, interest 9.03 (5.83 on the first 1000 for 31 days + 3.20 on the second from Jan 15). Mid-period declining
+/// multi-disbursement via the new-model merge path.
+#[test]
+fn declining_mid_period_second_disbursement() {
+    let periods = [(d(2024, Month::January, 1), d(2024, Month::February, 1))];
+    let jan1 = d(2024, Month::January, 1);
+    let jan15 = d(2024, Month::January, 15);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    let mut model = new_empty(
+        &periods,
+        &bd("7.0"),
+        DayCount::Days360Days30 { repay_every: 1 },
+        InterestMethod::DecliningBalance,
+        2,
+        RoundingMode::HalfEven,
+    );
+    model.add_disbursement(jan1, &m("1000.0"));
+    model.add_disbursement(jan15, &m("1000.0"));
+
+    check_ip(
+        &model,
+        0,
+        1,
+        "2009.03",
+        "0.002634408602",
+        "2.634408602",
+        "9.03",
+        "2000.00",
+        "0.00",
+    );
+    check_ip(
+        &model,
+        0,
+        2,
+        "2009.03",
+        "0.003198924731",
+        "6.397849462",
+        "9.03",
+        "2000.00",
+        "0.00",
+    );
+}
