@@ -6,7 +6,8 @@
 
 use bigdecimal::{BigDecimal, RoundingMode};
 use fc_loan_emi::recalc::{
-    DayCount, Model, new_declining_balance, new_declining_balance_with_day_count,
+    DayCount, InterestMethod, Model, new_declining_balance, new_declining_balance_with_day_count,
+    new_empty,
 };
 use std::str::FromStr;
 use time::{Date, Month};
@@ -2353,4 +2354,41 @@ fn change_due_date_partial_period() {
     check_rp(&model, 3, "17.01", "0.30", "16.71", "34.44");
     check_rp(&model, 4, "17.01", "0.20", "16.81", "17.63");
     check_rp(&model, 5, "21.59", "3.96", "17.63", "0.00");
+}
+
+/// `testFlatDaily_1_Month_360_30` (first two disbursement blocks): FLAT interest method, DAYS_360/30, 12%, 4 monthly
+/// periods. Disburse 750 → EMI 195.00 (flat interest 7.50/period on the original principal, equal principal 187.50);
+/// then a second disbursement of 250 (same date) → EMI 260.00 (flat interest 10.00 on 1000). Exercises the FLAT
+/// interest method in recalc (flat ip interest on total disbursed, flat EMI = (totalDisbursed + Σinterest)/n).
+#[test]
+fn flat_recalc_multi_disbursement() {
+    let periods = [
+        (d(2024, Month::January, 1), d(2024, Month::February, 1)),
+        (d(2024, Month::February, 1), d(2024, Month::March, 1)),
+        (d(2024, Month::March, 1), d(2024, Month::April, 1)),
+        (d(2024, Month::April, 1), d(2024, Month::May, 1)),
+    ];
+    let jan1 = d(2024, Month::January, 1);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    let mut model = new_empty(
+        &periods,
+        &bd("12.0"),
+        DayCount::Days360Days30 { repay_every: 1 },
+        InterestMethod::Flat,
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    model.add_disbursement(jan1, &m("750.0"));
+    check_rp(&model, 0, "195.00", "7.50", "187.50", "562.50");
+    check_rp(&model, 1, "195.00", "7.50", "187.50", "375.00");
+    check_rp(&model, 2, "195.00", "7.50", "187.50", "187.50");
+    check_rp(&model, 3, "195.00", "7.50", "187.50", "0.00");
+
+    model.add_disbursement(jan1, &m("250.0"));
+    check_rp(&model, 0, "260.00", "10.00", "250.00", "750.00");
+    check_rp(&model, 1, "260.00", "10.00", "250.00", "500.00");
+    check_rp(&model, 2, "260.00", "10.00", "250.00", "250.00");
+    check_rp(&model, 3, "260.00", "10.00", "250.00", "0.00");
 }

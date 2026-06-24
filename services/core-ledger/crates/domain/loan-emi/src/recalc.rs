@@ -395,14 +395,37 @@ impl Model {
         }
         let length_till = (rp.due - ip.from).whole_days();
         let length = (ip.due - ip.from).whole_days();
+        // FLAT accrues on the total disbursed (+ capitalized) up to this interest period; declining on the outstanding.
+        let base = match self.interest_method {
+            InterestMethod::Flat => self.total_disbursed_till(rp_idx, k),
+            InterestMethod::DecliningBalance => ip.outstanding_loan_balance.clone(),
+        };
         calculated_due_interest_declining(
             &self.mc,
-            ip.outstanding_loan_balance.amount(),
+            base.amount(),
             &ip.rate_factor_till_period_due_date,
             length,
             length_till,
             ip.credited_interest.amount(),
         )
+    }
+
+    /// `calculateTotalDisbursedAndCapitalizedIncomeAmountTillGivenPeriod(tillIp)` — total disbursed + capitalized of the
+    /// period, plus the disbursement/capitalized amounts of interest periods before `till_k` (excluding zero-length stubs
+    /// whose due date equals the repayment-period start).
+    fn total_disbursed_till(&self, rp_idx: usize, till_k: usize) -> Money {
+        let rp = &self.periods[rp_idx];
+        let mut res = rp
+            .total_disbursed_amount
+            .plus(&rp.total_capitalized_income_amount);
+        for ip in rp.interest_periods.iter().take(till_k) {
+            if ip.due != rp.from {
+                res = res
+                    .plus(&ip.disbursement_amount)
+                    .plus(&ip.capitalized_income_principal);
+            }
+        }
+        res
     }
 
     /// `RepaymentPeriod.getEmiPlusCreditedAmountsPlusFutureUnrecognizedInterest()`.
@@ -685,6 +708,38 @@ impl Model {
                 self.periods[i].original_emi = emi.clone();
             }
         }
+    }
+
+    /// `calculateEMIOnActualModelWithFlatInterestMethod` over `[start..]` (the no-payment path; the paid-period
+    /// reallocation branch is not yet ported). Flat interest accrues on the total disbursed; EMI = (totalDisbursed +
+    /// ΣflatInterest) / n with the rounding remainder on the last period, and each interest period's outstanding updated.
+    fn calculate_emi_on_actual_model_flat(&mut self, start: usize) {
+        let n = self.periods.len();
+        if start >= n {
+            return;
+        }
+        let mut sum_interest = self.zero();
+        for i in start..n {
+            let interest = self.calculated_due_interest(i);
+            sum_interest = sum_interest.plus(&interest);
+            self.periods[i].emi = interest;
+        }
+        let last_ip = self.periods[start].interest_periods.len().saturating_sub(1);
+        let total_disbursed = self.total_disbursed_till(start, last_ip);
+        let total = total_disbursed.plus(&sum_interest);
+        let count = (n - start) as i64;
+        let period_emi = total.divided_by(&BigDecimal::from(count));
+        let remainder = total.minus(&period_emi.multiplied_by(&BigDecimal::from(count)));
+        for i in start..n {
+            let emi = if i == n - 1 {
+                period_emi.plus(&remainder)
+            } else {
+                period_emi.clone()
+            };
+            self.periods[i].emi = emi.clone();
+            self.periods[i].original_emi = emi;
+        }
+        self.calculate_outstanding_balance();
     }
 
     /// `isEmpty()` — true when no period has a non-zero EMI (i.e. no disbursement has set the schedule yet).
@@ -977,6 +1032,13 @@ impl Model {
         {
             // calculateEMIValueAndRateFactorsForDecliningBalanceInterestMethod on the related periods.
             let related_start = self.related_start(self.effective_due_date(rp_idx, date));
+            if self.interest_method == InterestMethod::Flat {
+                // calculateEMIValueAndRateFactorsForFlatInterestMethod: rate factors then the flat EMI (which updates
+                // outstanding internally); no annuity / new-model-merge / last-unpaid / cent-adjust.
+                self.calculate_rate_factor_for_periods();
+                self.calculate_emi_on_actual_model_flat(related_start);
+                return;
+            }
             self.calculate_rate_factor_for_periods();
             self.calculate_outstanding_balance();
             if was_empty {
@@ -1934,4 +1996,66 @@ pub fn new_declining_balance_with_day_count(
         model.add_disbursement(*from, &Money::of(scale, mode, disbursed));
     }
     model
+}
+
+/// Build an EMPTY model (no disbursement applied) with the given interest method — for multi-disbursement scenarios
+/// (especially FLAT) where the caller applies disbursements explicitly via [`Model::add_disbursement`].
+#[must_use]
+pub fn new_empty(
+    period_dates: &[(Date, Date)],
+    nominal_rate_pct: &BigDecimal,
+    day_count: DayCount,
+    interest_method: InterestMethod,
+    scale: i64,
+    mode: RoundingMode,
+) -> Model {
+    let mc = Mc::new(12, mode);
+    let rate = mc.div(nominal_rate_pct, &BigDecimal::from(100));
+    let zero = Money::zero(scale, mode);
+    let periods = period_dates
+        .iter()
+        .map(|(from, due)| RepaymentPeriod {
+            from: *from,
+            due: *due,
+            interest_periods: vec![InterestPeriod {
+                from: *from,
+                due: *due,
+                rate_factor: BigDecimal::from(0),
+                rate_factor_till_period_due_date: BigDecimal::from(0),
+                credited_principal: zero.clone(),
+                credited_interest: zero.clone(),
+                disbursement_amount: zero.clone(),
+                balance_correction_amount: zero.clone(),
+                capitalized_income_principal: zero.clone(),
+                outstanding_loan_balance: zero.clone(),
+                is_paused: false,
+            }],
+            emi: zero.clone(),
+            original_emi: zero.clone(),
+            paid_principal: zero.clone(),
+            paid_interest: zero.clone(),
+            future_unrecognized_interest: zero.clone(),
+            total_disbursed_amount: zero.clone(),
+            total_capitalized_income_amount: zero.clone(),
+            interest_payment_grace: false,
+            is_interest_moved_upward: false,
+            is_interest_moved_downward: false,
+            re_aged: false,
+            re_aged_early_repayment_holder: false,
+            credited_principal_moved_due_reage: zero.clone(),
+            credited_interest_moved_due_reage: zero.clone(),
+            fixed_interest: zero.clone(),
+        })
+        .collect();
+    Model {
+        periods,
+        mc,
+        scale,
+        mode,
+        rate,
+        interest_rates: Vec::new(),
+        day_count,
+        interest_method,
+        emi_recalculation_enabled: true,
+    }
 }
