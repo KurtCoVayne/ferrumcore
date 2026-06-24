@@ -41,6 +41,16 @@ pub enum DayCount {
     /// ACTUAL days-in-month with a fixed days-in-year (e.g. DAYS_365 / DAYS_364): `rate × actualDays / daysInYear`,
     /// no year-boundary split.
     ActualFixedYear { days_in_year: i64 },
+    /// SAME_AS_REPAYMENT_PERIOD: `rate × repayEvery / months_in_year × actualDays / calculatedDays`
+    /// (`ProgressiveEMICalculator.calculateRateFactorPerPeriod*` MONTHS branch, lines 1381 & 1514, via
+    /// `rateFactorByRepaymentPeriod(rate, ONE, repaymentEvery, 12, actual, calc)`). `months_in_year` = 12 monthly, 52
+    /// weekly. A mid-period segment is prorated by its day-share (`actualDays/calcDays`) — the partial factor is the
+    /// same formula with `actualDays` = the segment length; there is no separate partial-period formula for same-year
+    /// monthly periods.
+    SameAsRepayment {
+        repay_every: i64,
+        months_in_year: i64,
+    },
 }
 
 /// One interest period (`InterestPeriod`). All money at currency scale; rate factors full precision.
@@ -106,6 +116,10 @@ pub struct Model {
     pub day_count: DayCount,
     pub interest_method: InterestMethod,
     pub emi_recalculation_enabled: bool,
+    /// `isAllowPartialPeriodInterestCalculation` — when false, a disbursement is snapped to the containing repayment
+    /// period's from-date (no mid-period interest-period split); when true it splits at the exact date. Only consulted
+    /// for [`DayCount::SameAsRepayment`]; other day counts always split at the exact date (so default `true`).
+    pub allow_partial_period_interest: bool,
 }
 
 // --- Money helpers (mirroring MathUtil / Money) ---
@@ -241,6 +255,18 @@ impl Model {
                     &one,
                 )
             }
+            DayCount::SameAsRepayment {
+                repay_every,
+                months_in_year,
+            } => rate_factor_by_repayment_period(
+                &self.mc,
+                rate,
+                &BigDecimal::from(1), // multiplierInDays = ONE
+                &BigDecimal::from(repay_every),
+                &BigDecimal::from(months_in_year), // "daysInYear" = 12 (months)
+                &BigDecimal::from((ip_due - ip_from).whole_days()), // actualDaysInPeriod (segment length)
+                &BigDecimal::from((rp_due - rp_from).whole_days()), // calculatedDaysInPeriod
+            ),
         }
     }
 
@@ -304,6 +330,18 @@ impl Model {
                     &one,
                 )
             }
+            DayCount::SameAsRepayment {
+                repay_every,
+                months_in_year,
+            } => rate_factor_by_repayment_period(
+                &self.mc,
+                rate,
+                &BigDecimal::from(1),
+                &BigDecimal::from(repay_every),
+                &BigDecimal::from(months_in_year),
+                &BigDecimal::from((rp_due - ip_from).whole_days()), // till the rp due date
+                &BigDecimal::from((rp_due - rp_from).whole_days()),
+            ),
         }
     }
 
@@ -1071,7 +1109,27 @@ impl Model {
     }
 
     /// `addDisbursement(date, amount)` for the declining-balance, single-tranche case.
+    /// `addDisbursement` lines 128-133: when SAME_AS_REPAYMENT && !allowPartial, snap a disbursement to the from-date of
+    /// the first repayment period whose due date is after the disbursement date (the containing period's start), so the
+    /// balance change lands on a period boundary and no mid-period split is created. Otherwise the exact date is used.
+    fn effective_disbursement_date(&self, date: Date) -> Date {
+        let snap = matches!(self.day_count, DayCount::SameAsRepayment { .. })
+            && !self.allow_partial_period_interest;
+        if snap {
+            self.periods
+                .iter()
+                .find(|rp| rp.due > date)
+                .map_or(date, |rp| rp.from)
+        } else {
+            date
+        }
+    }
+
     pub fn add_disbursement(&mut self, date: Date, amount: &Money) {
+        // `addDisbursement` lines 128-133: under SAME_AS_REPAYMENT with !allowPartial, snap the disbursement to the
+        // containing period's from-date so no mid-period interest-period split occurs (the new principal accrues for
+        // the whole period). The snap happens before everything downstream, exactly like Java's `effectiveDueDate`.
+        let date = self.effective_disbursement_date(date);
         for rp in &mut self.periods {
             if date <= rp.from {
                 rp.total_disbursed_amount = rp.total_disbursed_amount.plus(amount);
@@ -2114,6 +2172,7 @@ pub fn new_declining_balance_with_day_count(
         day_count,
         interest_method: InterestMethod::DecliningBalance,
         emi_recalculation_enabled: true,
+        allow_partial_period_interest: true,
     };
     if let (Some((from, _)), _) = (period_dates.first(), ()) {
         model.add_disbursement(*from, &Money::of(scale, mode, disbursed));
@@ -2180,5 +2239,34 @@ pub fn new_empty(
         day_count,
         interest_method,
         emi_recalculation_enabled: true,
+        allow_partial_period_interest: true,
     }
+}
+
+/// Build an EMPTY SAME_AS_REPAYMENT model with the partial-period flag — for the sameAsRepayment multi-disbursement
+/// scenarios. `months_in_year` is 12 (monthly) / 52 (weekly); `allow_partial` is `isAllowPartialPeriodInterestCalculation`.
+#[allow(clippy::too_many_arguments)]
+pub fn new_empty_same_as_repayment(
+    period_dates: &[(Date, Date)],
+    nominal_rate_pct: &BigDecimal,
+    repay_every: i64,
+    months_in_year: i64,
+    allow_partial: bool,
+    interest_method: InterestMethod,
+    scale: i64,
+    mode: RoundingMode,
+) -> Model {
+    let mut m = new_empty(
+        period_dates,
+        nominal_rate_pct,
+        DayCount::SameAsRepayment {
+            repay_every,
+            months_in_year,
+        },
+        interest_method,
+        scale,
+        mode,
+    );
+    m.allow_partial_period_interest = allow_partial;
+    m
 }

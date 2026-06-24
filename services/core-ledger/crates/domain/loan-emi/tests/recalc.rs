@@ -7,7 +7,7 @@
 use bigdecimal::{BigDecimal, RoundingMode};
 use fc_loan_emi::recalc::{
     DayCount, InterestMethod, Model, new_declining_balance, new_declining_balance_with_day_count,
-    new_empty,
+    new_empty, new_empty_same_as_repayment,
 };
 use std::str::FromStr;
 use time::{Date, Month};
@@ -4705,13 +4705,75 @@ fn reage_payable_mid_period_string_on_next_due_date() {
     );
 
     // Generation block — java checkPeriod lines 4896-4902 (7-arg ip form: interestDue passed as calc & cumulated).
-    check_ip(&model, 0, 0, "17.43", "0.0", "0.0", "1.33", "16.10", "83.90");
-    check_ip(&model, 0, 1, "17.43", "0.013315561644", "1.3315561644", "1.33", "16.10", "83.90");
-    check_ip(&model, 1, 0, "17.43", "0.012456493151", "1.04509977537", "1.05", "16.38", "67.52");
-    check_ip(&model, 2, 0, "17.43", "0.013315561644", "0.899066722202", "0.90", "16.53", "50.99");
-    check_ip(&model, 3, 0, "17.43", "0.012886027397", "0.657058536972", "0.66", "16.77", "34.22");
-    check_ip(&model, 4, 0, "17.43", "0.013315561644", "0.455658519458", "0.46", "16.97", "17.25");
-    check_ip(&model, 5, 0, "17.47", "0.012886027397", "0.222283972598", "0.22", "17.25", "0.00");
+    check_ip(
+        &model, 0, 0, "17.43", "0.0", "0.0", "1.33", "16.10", "83.90",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.43",
+        "0.013315561644",
+        "1.3315561644",
+        "1.33",
+        "16.10",
+        "83.90",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.43",
+        "0.012456493151",
+        "1.04509977537",
+        "1.05",
+        "16.38",
+        "67.52",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.43",
+        "0.013315561644",
+        "0.899066722202",
+        "0.90",
+        "16.53",
+        "50.99",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.43",
+        "0.012886027397",
+        "0.657058536972",
+        "0.66",
+        "16.77",
+        "34.22",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.43",
+        "0.013315561644",
+        "0.455658519458",
+        "0.46",
+        "16.97",
+        "17.25",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "17.47",
+        "0.012886027397",
+        "0.222283972598",
+        "0.22",
+        "17.25",
+        "0.00",
+    );
 
     // repay EMI on first period due date
     model.pay_principal(jan1, feb1, feb1, &m("16.1"));
@@ -4776,13 +4838,75 @@ fn reage_payable_transaction_on_maturity_string_after_maturity() {
     );
 
     // Generation block — java checkPeriod lines 4979-4985.
-    check_ip(&model, 0, 0, "17.43", "0.0", "0.0", "1.33", "16.10", "83.90");
-    check_ip(&model, 0, 1, "17.43", "0.013315561644", "1.3315561644", "1.33", "16.10", "83.90");
-    check_ip(&model, 1, 0, "17.43", "0.012456493151", "1.04509977537", "1.05", "16.38", "67.52");
-    check_ip(&model, 2, 0, "17.43", "0.013315561644", "0.899066722202", "0.90", "16.53", "50.99");
-    check_ip(&model, 3, 0, "17.43", "0.012886027397", "0.657058536972", "0.66", "16.77", "34.22");
-    check_ip(&model, 4, 0, "17.43", "0.013315561644", "0.455658519458", "0.46", "16.97", "17.25");
-    check_ip(&model, 5, 0, "17.47", "0.012886027397", "0.222283972598", "0.22", "17.25", "0.00");
+    check_ip(
+        &model, 0, 0, "17.43", "0.0", "0.0", "1.33", "16.10", "83.90",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.43",
+        "0.013315561644",
+        "1.3315561644",
+        "1.33",
+        "16.10",
+        "83.90",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.43",
+        "0.012456493151",
+        "1.04509977537",
+        "1.05",
+        "16.38",
+        "67.52",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.43",
+        "0.013315561644",
+        "0.899066722202",
+        "0.90",
+        "16.53",
+        "50.99",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.43",
+        "0.012886027397",
+        "0.657058536972",
+        "0.66",
+        "16.77",
+        "34.22",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.43",
+        "0.013315561644",
+        "0.455658519458",
+        "0.46",
+        "16.97",
+        "17.25",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "17.47",
+        "0.012886027397",
+        "0.222283972598",
+        "0.22",
+        "17.25",
+        "0.00",
+    );
 
     // repay EMI on first period due date
     model.pay_principal(jan1, feb1, feb1, &m("16.1"));
@@ -4838,13 +4962,75 @@ fn reage_payable_transaction_after_maturity() {
     );
 
     // Generation block — java checkPeriod lines 5052-5058.
-    check_ip(&model, 0, 0, "17.43", "0.0", "0.0", "1.33", "16.10", "83.90");
-    check_ip(&model, 0, 1, "17.43", "0.013315561644", "1.3315561644", "1.33", "16.10", "83.90");
-    check_ip(&model, 1, 0, "17.43", "0.012456493151", "1.04509977537", "1.05", "16.38", "67.52");
-    check_ip(&model, 2, 0, "17.43", "0.013315561644", "0.899066722202", "0.90", "16.53", "50.99");
-    check_ip(&model, 3, 0, "17.43", "0.012886027397", "0.657058536972", "0.66", "16.77", "34.22");
-    check_ip(&model, 4, 0, "17.43", "0.013315561644", "0.455658519458", "0.46", "16.97", "17.25");
-    check_ip(&model, 5, 0, "17.47", "0.012886027397", "0.222283972598", "0.22", "17.25", "0.00");
+    check_ip(
+        &model, 0, 0, "17.43", "0.0", "0.0", "1.33", "16.10", "83.90",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.43",
+        "0.013315561644",
+        "1.3315561644",
+        "1.33",
+        "16.10",
+        "83.90",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.43",
+        "0.012456493151",
+        "1.04509977537",
+        "1.05",
+        "16.38",
+        "67.52",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.43",
+        "0.013315561644",
+        "0.899066722202",
+        "0.90",
+        "16.53",
+        "50.99",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.43",
+        "0.012886027397",
+        "0.657058536972",
+        "0.66",
+        "16.77",
+        "34.22",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.43",
+        "0.013315561644",
+        "0.455658519458",
+        "0.46",
+        "16.97",
+        "17.25",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "17.47",
+        "0.012886027397",
+        "0.222283972598",
+        "0.22",
+        "17.25",
+        "0.00",
+    );
 
     // repay EMI on first period due date
     model.pay_principal(jan1, feb1, feb1, &m("16.1"));
@@ -4871,4 +5057,362 @@ fn reage_payable_transaction_after_maturity() {
         i_before.to_plain_string(),
         "PAYABLE_INTEREST re-age preserves outstanding interest"
     );
+}
+
+// ----- helpers reused: bd, d, m closure, check_rp, check_ip -----
+
+fn three_monthly(start_y: i32, start_m: Month) -> Vec<(Date, Date)> {
+    // expectedRepaymentsMonthly(disbursementDate, 3, 1)
+    let plus = |n: i64| {
+        // disbursementDate.plusMonths(n) for day-1 dates
+        let mut y = start_y;
+        let mut mo = start_m as u8 as i64 - 1 + n;
+        y += (mo / 12) as i32;
+        mo %= 12;
+        d(y, Month::try_from((mo + 1) as u8).unwrap(), 1)
+    };
+    vec![(plus(0), plus(1)), (plus(1), plus(2)), (plus(2), plus(3))]
+}
+
+// ============ DECLINING (Java class DecliningBalanceSameAsRepaymentPeriod) ============
+// @BeforeEach (lines 3977-3981): DECLINING_BALANCE, SAME_AS_REPAYMENT_PERIOD, ACTUAL/ACTUAL.
+
+/// Java test_3_of_1_month_period_multi_disbursement__exact_days (lines 3984-4020).
+#[test]
+fn same_as_repayment_declining_multi_disbursement_exact_days() {
+    let periods = three_monthly(2024, Month::June);
+    let jun1 = d(2024, Month::June, 1);
+    let jul15 = d(2024, Month::July, 15);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+    let mut model = new_empty_same_as_repayment(
+        &periods,
+        &bd("12.0"),
+        1,
+        12,
+        /*allow_partial*/ true,
+        InterestMethod::DecliningBalance,
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    model.add_disbursement(jun1, &m("500.0")); // line 4004
+    check_rp(&model, 0, "170.01", "5.00", "165.01", "334.99"); // 4005
+    check_rp(&model, 1, "170.01", "3.35", "166.66", "168.33"); // 4006
+    check_rp(&model, 2, "170.01", "1.68", "168.33", "0.00"); // 4007
+
+    model.add_disbursement(jun1, &m("500.0")); // 4009
+    check_rp(&model, 0, "340.02", "10.00", "330.02", "669.98"); // 4011
+    check_rp(&model, 1, "340.02", "6.70", "333.32", "336.66"); // 4012
+    check_rp(&model, 2, "340.03", "3.37", "336.66", "0.00"); // 4013
+
+    model.add_disbursement(jul15, &m("250.0")); // 4016
+    check_rp(&model, 0, "340.02", "10.00", "330.02", "669.98"); // 4017
+    check_rp(&model, 1, "466.33", "8.07", "458.26", "461.72"); // 4018
+    check_rp(&model, 2, "466.34", "4.62", "461.72", "0.00"); // 4019
+}
+
+/// Java test_3_of_1_month_period_multi_disbursement__exact_days__on_period_due_date (lines 4022-4057).
+#[test]
+fn same_as_repayment_declining_multi_disbursement_exact_days_on_period_due_date() {
+    let periods = three_monthly(2024, Month::June);
+    let jun1 = d(2024, Month::June, 1);
+    let jul1 = d(2024, Month::July, 1);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+    let mut model = new_empty_same_as_repayment(
+        &periods,
+        &bd("12.0"),
+        1,
+        12,
+        true,
+        InterestMethod::DecliningBalance,
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    model.add_disbursement(jun1, &m("500.0")); // 4042
+    check_rp(&model, 0, "170.01", "5.00", "165.01", "334.99"); // 4043
+    check_rp(&model, 1, "170.01", "3.35", "166.66", "168.33"); // 4044
+    check_rp(&model, 2, "170.01", "1.68", "168.33", "0.00"); // 4045
+
+    model.add_disbursement(jun1, &m("500.0")); // 4047
+    check_rp(&model, 0, "340.02", "10.00", "330.02", "669.98"); // 4048
+    check_rp(&model, 1, "340.02", "6.70", "333.32", "336.66"); // 4049
+    check_rp(&model, 2, "340.03", "3.37", "336.66", "0.00"); // 4050
+
+    model.add_disbursement(jul1, &m("250.0")); // 4053
+    check_rp(&model, 0, "340.02", "10.00", "330.02", "919.98"); // 4054
+    check_rp(&model, 1, "466.90", "9.20", "457.70", "462.28"); // 4055
+    check_rp(&model, 2, "466.90", "4.62", "462.28", "0.00"); // 4056
+}
+
+/// Java test_3_of_1_month_period_multi_disbursement__NOT_exact_days__different_days (lines 4059-4116).
+#[test]
+fn same_as_repayment_declining_multi_disbursement_not_exact_days_different_days() {
+    let periods = three_monthly(2024, Month::June);
+    let jun1 = d(2024, Month::June, 1);
+    let jul1 = d(2024, Month::July, 1);
+    let jul15 = d(2024, Month::July, 15);
+    let jul23 = d(2024, Month::July, 23);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+    let mut model = new_empty_same_as_repayment(
+        &periods,
+        &bd("12.0"),
+        1,
+        12,
+        /*allow_partial*/ false,
+        InterestMethod::DecliningBalance,
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    model.add_disbursement(jun1, &m("500.0")); // 4079
+    check_rp(&model, 0, "170.01", "5.00", "165.01", "334.99"); // 4080
+    check_rp(&model, 1, "170.01", "3.35", "166.66", "168.33"); // 4081
+    check_rp(&model, 2, "170.01", "1.68", "168.33", "0.00"); // 4082
+
+    model.add_disbursement(jun1, &m("500.0")); // 4084
+    check_rp(&model, 0, "340.02", "10.00", "330.02", "669.98"); // 4085
+    check_rp(&model, 1, "340.02", "6.70", "333.32", "336.66"); // 4086
+    check_rp(&model, 2, "340.03", "3.37", "336.66", "0.00"); // 4087
+
+    model.add_disbursement(jul1, &m("50.0")); // 4092
+    check_rp(&model, 0, "340.02", "10.00", "330.02", "719.98"); // 4093
+    check_rp(&model, 1, "365.40", "7.20", "358.20", "361.78"); // 4094
+    check_rp(&model, 2, "365.40", "3.62", "361.78", "0.00"); // 4095
+
+    model.add_disbursement(jul15, &m("50.0")); // 4097
+    check_rp(&model, 0, "340.02", "10.00", "330.02", "769.98"); // 4098
+    check_rp(&model, 1, "390.77", "7.70", "383.07", "386.91"); // 4099
+    check_rp(&model, 2, "390.78", "3.87", "386.91", "0.00"); // 4100
+
+    model.add_disbursement(jul15, &m("50.0")); // 4102
+    check_rp(&model, 0, "340.02", "10.00", "330.02", "819.98"); // 4103
+    check_rp(&model, 1, "416.15", "8.20", "407.95", "412.03"); // 4104
+    check_rp(&model, 2, "416.15", "4.12", "412.03", "0.00"); // 4105
+
+    model.add_disbursement(jul23, &m("50.0")); // 4107
+    check_rp(&model, 0, "340.02", "10.00", "330.02", "869.98"); // 4108
+    check_rp(&model, 1, "441.53", "8.70", "432.83", "437.15"); // 4109
+    check_rp(&model, 2, "441.52", "4.37", "437.15", "0.00"); // 4110
+
+    model.add_disbursement(jul23, &m("50.0")); // 4112
+    check_rp(&model, 0, "340.02", "10.00", "330.02", "919.98"); // 4113
+    check_rp(&model, 1, "466.90", "9.20", "457.70", "462.28"); // 4114
+    check_rp(&model, 2, "466.90", "4.62", "462.28", "0.00"); // 4115
+}
+
+/// Java test_3_of_1_month_period_multi_disbursement__NOT_exact_days (lines 4118-4158).
+#[test]
+fn same_as_repayment_declining_multi_disbursement_not_exact_days() {
+    let periods = three_monthly(2024, Month::June);
+    let jun1 = d(2024, Month::June, 1);
+    let jul15 = d(2024, Month::July, 15);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+    let mut model = new_empty_same_as_repayment(
+        &periods,
+        &bd("12.0"),
+        1,
+        12,
+        /*allow_partial*/ false,
+        InterestMethod::DecliningBalance,
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    model.add_disbursement(jun1, &m("500.0")); // 4138
+    check_rp(&model, 0, "170.01", "5.00", "165.01", "334.99"); // 4139
+    check_rp(&model, 1, "170.01", "3.35", "166.66", "168.33"); // 4140
+    check_rp(&model, 2, "170.01", "1.68", "168.33", "0.00"); // 4141
+
+    model.add_disbursement(jun1, &m("500.0")); // 4143
+    check_rp(&model, 0, "340.02", "10.00", "330.02", "669.98"); // 4144
+    check_rp(&model, 1, "340.02", "6.70", "333.32", "336.66"); // 4145
+    check_rp(&model, 2, "340.03", "3.37", "336.66", "0.00"); // 4146
+
+    model.add_disbursement(jul15, &m("130.0")); // 4149
+    check_rp(&model, 0, "340.02", "10.00", "330.02", "799.98"); // 4150
+    check_rp(&model, 1, "406.00", "8.00", "398.00", "401.98"); // 4151
+    check_rp(&model, 2, "406.00", "4.02", "401.98", "0.00"); // 4152
+
+    model.add_disbursement(jul15, &m("120.0")); // 4154
+    check_rp(&model, 0, "340.02", "10.00", "330.02", "919.98"); // 4155
+    check_rp(&model, 1, "466.90", "9.20", "457.70", "462.28"); // 4156
+    check_rp(&model, 2, "466.90", "4.62", "462.28", "0.00"); // 4157
+}
+
+// ============ FLAT (Java class InterestTypeFlatAndCalculationPeriodSameAsRepaymentPeriod) ============
+// @BeforeEach (lines 3605-3616): FLAT, SAME_AS_REPAYMENT_PERIOD, ACTUAL/ACTUAL, allowPartial=true (overridden per test).
+
+/// Java test_sameAsRepayment_month_repay_every_1_periods_3_second_disbursement_on_repayment_due_date_allow_partial
+/// (lines 3710-3742).
+#[test]
+fn same_as_repayment_flat_periods_3_second_disbursement_on_due_date_allow_partial() {
+    let periods = three_monthly(2024, Month::January);
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1); // disbursementDate.plusMonths(1)
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+    let mut model = new_empty_same_as_repayment(
+        &periods,
+        &bd("12.0"),
+        1,
+        12,
+        /*allow_partial*/ true,
+        InterestMethod::Flat,
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    model.add_disbursement(jan1, &m("1000.0")); // 3731
+    check_rp(&model, 0, "343.33", "10.00", "333.33", "666.67"); // 3733
+    check_rp(&model, 1, "343.33", "10.00", "333.33", "333.34"); // 3734
+    check_rp(&model, 2, "343.34", "10.00", "333.34", "0.00"); // 3735
+
+    model.add_disbursement(feb1, &m("250.0")); // 3737
+    check_rp(&model, 0, "343.33", "10.00", "333.33", "916.67"); // 3739
+    check_rp(&model, 1, "470.84", "12.50", "458.34", "458.33"); // 3740
+    check_rp(&model, 2, "470.83", "12.50", "458.33", "0.00"); // 3741
+}
+
+/// Java ..._second_disbursement_on_repayment_due_date_disallow_partial (lines 3744-3776).
+#[test]
+fn same_as_repayment_flat_periods_3_second_disbursement_on_due_date_disallow_partial() {
+    let periods = three_monthly(2024, Month::January);
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+    let mut model = new_empty_same_as_repayment(
+        &periods,
+        &bd("12.0"),
+        1,
+        12,
+        /*allow_partial*/ false,
+        InterestMethod::Flat,
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    model.add_disbursement(jan1, &m("1000.0")); // 3765
+    check_rp(&model, 0, "343.33", "10.00", "333.33", "666.67"); // 3767
+    check_rp(&model, 1, "343.33", "10.00", "333.33", "333.34"); // 3768
+    check_rp(&model, 2, "343.34", "10.00", "333.34", "0.00"); // 3769
+
+    model.add_disbursement(feb1, &m("250.0")); // 3771
+    check_rp(&model, 0, "343.33", "10.00", "333.33", "916.67"); // 3773
+    check_rp(&model, 1, "470.84", "12.50", "458.34", "458.33"); // 3774
+    check_rp(&model, 2, "470.83", "12.50", "458.33", "0.00"); // 3775
+}
+
+/// Java test_sameAsRepayment_month_repay_every_1_periods_3 (lines 3778-3815). allowPartial=true (from @BeforeEach).
+#[test]
+fn same_as_repayment_flat_periods_3_mid_period_disbursements() {
+    let periods = three_monthly(2024, Month::January);
+    let jan1 = d(2024, Month::January, 1);
+    let jan5 = d(2024, Month::January, 5); // disbursementDate.plusDays(4)
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+    let mut model = new_empty_same_as_repayment(
+        &periods,
+        &bd("12.0"),
+        1,
+        12,
+        /*allow_partial*/ true,
+        InterestMethod::Flat,
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    model.add_disbursement(jan1, &m("1000.0")); // 3797
+    check_rp(&model, 0, "343.33", "10.00", "333.33", "666.67"); // 3799
+    check_rp(&model, 1, "343.33", "10.00", "333.33", "333.34"); // 3800
+    check_rp(&model, 2, "343.34", "10.00", "333.34", "0.00"); // 3801
+
+    model.add_disbursement(jan5, &m("250.0")); // 3803
+    check_rp(&model, 0, "429.06", "12.18", "416.88", "833.12"); // 3805
+    check_rp(&model, 1, "429.06", "12.50", "416.56", "416.56"); // 3806
+    check_rp(&model, 2, "429.06", "12.50", "416.56", "0.00"); // 3807
+
+    model.add_disbursement(jan5, &m("250.0")); // 3809
+    check_rp(&model, 0, "514.78", "14.35", "500.43", "999.57"); // 3811
+    check_rp(&model, 1, "514.78", "15.00", "499.78", "499.79"); // 3812
+    check_rp(&model, 2, "514.79", "15.00", "499.79", "0.00"); // 3813
+}
+
+/// Java test_sameAsRepayment_month_repay_every_1_periods_3__not_calculate_exact_days (lines 3933-3969).
+#[test]
+fn same_as_repayment_flat_periods_3_not_calculate_exact_days() {
+    let periods = three_monthly(2024, Month::January);
+    let jan1 = d(2024, Month::January, 1);
+    let jan5 = d(2024, Month::January, 5); // plusDays(4)
+    let jan18 = d(2024, Month::January, 18); // plusDays(17)
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+    let mut model = new_empty_same_as_repayment(
+        &periods,
+        &bd("12.0"),
+        1,
+        12,
+        /*allow_partial*/ false,
+        InterestMethod::Flat,
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    model.add_disbursement(jan1, &m("1000.0")); // 3953
+    check_rp(&model, 0, "343.33", "10.00", "333.33", "666.67"); // 3955
+    check_rp(&model, 1, "343.33", "10.00", "333.33", "333.34"); // 3956
+    check_rp(&model, 2, "343.34", "10.00", "333.34", "0.00"); // 3957
+
+    model.add_disbursement(jan5, &m("250.0")); // 3959
+    check_rp(&model, 0, "429.17", "12.50", "416.67", "833.33"); // 3960
+    check_rp(&model, 1, "429.17", "12.50", "416.67", "416.66"); // 3961
+    check_rp(&model, 2, "429.16", "12.50", "416.66", "0.00"); // 3962
+
+    model.add_disbursement(jan18, &m("250.0")); // 3964
+    check_rp(&model, 0, "515.00", "15.00", "500.00", "1000.00"); // 3965
+    check_rp(&model, 1, "515.00", "15.00", "500.00", "500.00"); // 3966
+    check_rp(&model, 2, "515.00", "15.00", "500.00", "0.00"); // 3967
+}
+
+/// Java test_sameAsRepayment_month_repay_every_1_periods_24, second-disbursement block (lines 3859-3931).
+/// Uses 24 monthly periods; only the post-3rd-disbursement (Apr-5 = plusMonths(3).plusDays(4)) assertions shown for the
+/// second disbursement focus. allowPartial=true (from @BeforeEach).
+#[test]
+fn same_as_repayment_flat_periods_24_second_disbursement() {
+    // expectedRepaymentsMonthly(2024-01-01, 24, 1)
+    let periods: Vec<(Date, Date)> = (0..24)
+        .map(|i| {
+            let from_total = i;
+            let due_total = i + 1;
+            let mk = |t: i64| {
+                let y = 2024 + (t / 12) as i32;
+                let mo = (t % 12) as u8 + 1;
+                d(y, Month::try_from(mo).unwrap(), 1)
+            };
+            (mk(from_total), mk(due_total))
+        })
+        .collect();
+    let jan1 = d(2024, Month::January, 1);
+    let apr5 = d(2024, Month::April, 5); // plusMonths(3).plusDays(4)
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+    let mut model = new_empty_same_as_repayment(
+        &periods,
+        &bd("12.0"),
+        1,
+        12,
+        /*allow_partial*/ true,
+        InterestMethod::Flat,
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    model.add_disbursement(jan1, &m("7500.0")); // 3877
+    model.add_disbursement(jan1, &m("2500.0")); // 3878
+    check_rp(&model, 0, "516.67", "100.00", "416.67", "9583.33"); // 3880
+    check_rp(&model, 23, "516.59", "100.00", "416.59", "0.00"); // 3903 (tail)
+
+    model.add_disbursement(apr5, &m("1000.0")); // 3905
+    check_rp(&model, 0, "516.67", "100.00", "416.67", "9583.33"); // 3907
+    check_rp(&model, 1, "516.67", "100.00", "416.67", "9166.66"); // 3908
+    check_rp(&model, 2, "516.67", "100.00", "416.67", "8749.99"); // 3909
+    check_rp(&model, 3, "574.22", "108.67", "465.55", "9284.44"); // 3910
+    check_rp(&model, 4, "574.22", "110.00", "464.22", "8820.22"); // 3911
+    check_rp(&model, 23, "574.26", "110.00", "464.26", "0.00"); // 3930 (tail)
 }
