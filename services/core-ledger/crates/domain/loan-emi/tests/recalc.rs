@@ -2282,3 +2282,41 @@ fn change_due_date_reschedule() {
         "rp5 due extended"
     );
 }
+
+/// `test_two_reschedules_disbursedAmt100_*`: two changeDueDate calls — move period 0 to Mar 1, then the period
+/// containing May 1 to Jun 1. The cumulative reschedules extend the last period further (interest 2.51, EMI 20.41).
+#[test]
+fn change_due_date_two_reschedules() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    model.change_due_date(
+        d(2024, Month::February, 1),
+        d(2024, Month::March, 1),
+        Some(0),
+    );
+    model.change_due_date(d(2024, Month::May, 1), d(2024, Month::June, 1), Some(0));
+
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.005833333333",
+        "1.1666666667",
+        "1.17",
+        "15.84",
+        "84.16",
+    );
+    check_rp(&model, 1, "17.01", "0.49", "16.52", "67.64");
+    check_rp(&model, 2, "17.01", "0.79", "16.22", "51.42");
+    check_rp(&model, 3, "17.01", "0.30", "16.71", "34.71");
+    check_rp(&model, 4, "17.01", "0.20", "16.81", "17.90");
+    check_rp(&model, 5, "20.41", "2.51", "17.90", "0.00");
+}
