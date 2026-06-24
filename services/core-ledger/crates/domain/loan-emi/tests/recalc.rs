@@ -1242,6 +1242,45 @@ fn interest_pause_whole_month() {
     );
 }
 
+/// `test_interestPauseFirstDayOfMonthAmt100_*`: pause Feb 1–5 — the pause starts on period 1's from-date (a period
+/// boundary), so period 0 is split at Jan 31 (pauseStart−1) leaving a 1-day non-accruing stub, and period 1 splits at
+/// Feb 4 with the Feb1-Feb4 segment paused.
+#[test]
+fn interest_pause_first_day_of_month() {
+    let mut model =
+        new_declining_balance(&six_monthly(), &bd("100"), &bd("7.0"), 1, 2, RoundingMode::HalfEven);
+    model.apply_interest_pause(d(2024, Month::February, 1), d(2024, Month::February, 5));
+
+    check_ip(&model, 0, 0, "17.01", "0.0", "0.0", "0.56", "16.45", "83.55");
+    check_ip(&model, 0, 1, "17.01", "0.00564516129", "0.564516129", "0.56", "16.45", "83.55");
+    check_ip(&model, 0, 2, "17.01", "0.000188172043", "0.0", "0.56", "16.45", "83.55");
+    check_ip(&model, 1, 0, "17.01", "0.000804597701", "0.0", "0.42", "16.59", "66.96");
+    check_ip(&model, 1, 1, "17.01", "0.005028735632", "0.420150862055", "0.42", "16.59", "66.96");
+    check_ip(&model, 2, 0, "17.01", "0.005833333333", "0.390599999978", "0.39", "16.62", "50.34");
+    check_ip(&model, 3, 0, "17.01", "0.005833333333", "0.293649999983", "0.29", "16.72", "33.62");
+    check_ip(&model, 4, 0, "17.01", "0.005833333333", "0.196116666655", "0.20", "16.81", "16.81");
+    check_ip(&model, 5, 0, "16.91", "0.005833333333", "0.0980583333276", "0.10", "16.81", "0.00");
+}
+
+/// `test_interestPauseTwoWholeMonthsAmt100_*`: pause Feb 1 – Mar 31 spanning periods 1 and 2 entirely — period 1
+/// accrues no interest (full pause), period 2 carries only the Mar 31–Apr 1 tail, cascading balances and tail EMI.
+#[test]
+fn interest_pause_two_whole_months() {
+    let mut model =
+        new_declining_balance(&six_monthly(), &bd("100"), &bd("7.0"), 1, 2, RoundingMode::HalfEven);
+    model.apply_interest_pause(d(2024, Month::February, 1), d(2024, Month::March, 31));
+
+    check_ip(&model, 0, 0, "17.01", "0.0", "0.0", "0.56", "16.45", "83.55");
+    check_ip(&model, 0, 1, "17.01", "0.00564516129", "0.564516129", "0.56", "16.45", "83.55");
+    check_ip(&model, 0, 2, "17.01", "0.000188172043", "0.0", "0.56", "16.45", "83.55");
+    check_ip(&model, 1, 0, "17.01", "0.005833333333", "0.0", "0.00", "17.01", "66.54");
+    check_ip(&model, 2, 0, "17.01", "0.00564516129", "0.0", "0.01", "17.00", "49.54");
+    check_ip(&model, 2, 1, "17.01", "0.000188172043", "0.0125209677412", "0.01", "17.00", "49.54");
+    check_ip(&model, 3, 0, "17.01", "0.005833333333", "0.288983333317", "0.29", "16.72", "32.82");
+    check_ip(&model, 4, 0, "17.01", "0.005833333333", "0.191449999989", "0.19", "16.82", "16.00");
+    check_ip(&model, 5, 0, "16.09", "0.005833333333", "0.0933333333279", "0.09", "16.00", "0.00");
+}
+
 /// `test_disbursedAmt1000_actual_actual_repayEvery1Month_verify_due_principal_amounts`: 1000 @ 25% ACTUAL/ACTUAL over
 /// 12 monthly periods (crossing into 2025), paying each period's principal upfront on the disbursement date. Confirms
 /// the ACTUAL/ACTUAL day count is wired into the recalc rate factors (EMI 95.02), with interest zero (paid before
