@@ -2114,3 +2114,44 @@ fn reage_payable_interest_after_mir_payments() {
         "PAYABLE_INTEREST re-age preserves outstanding interest"
     );
 }
+
+/// `test_chargeBackOn2ndRP_ReAgeingOn1stRPsDueDate_EQUAL_AMORTIZATION_FULL_INTEREST`: 100 @ 15.678% DAYS_365 — repay
+/// period 0, chargeback 17.43 on Feb 1, then a FULL_INTEREST re-age on Feb 1. The chargeback + re-age together still
+/// preserve the total outstanding (before == after). Exercises re-age interacting with credited principal.
+#[test]
+fn reage_after_chargeback_preserves_outstanding() {
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    let mut model = new_declining_balance_with_day_count(
+        &six_monthly(),
+        &bd("100"),
+        &bd("15.678"),
+        DayCount::ActualFixedYear { days_in_year: 365 },
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    model.pay_principal(jan1, feb1, feb1, &m("16.1"));
+    model.pay_interest(jan1, feb1, feb1, &m("1.33"));
+    model.credit_principal(feb1, &m("17.43"));
+
+    let maturity_before = model.periods.last().unwrap().due;
+    let (p_before, i_before) = model.get_outstanding_amounts_till_date(maturity_before);
+
+    model.re_age_equal_amortization(feb1, feb1, 6, 1, true);
+
+    let maturity_after = model.periods.last().unwrap().due;
+    let (p_after, i_after) = model.get_outstanding_amounts_till_date(maturity_after);
+    assert_eq!(
+        p_after.to_plain_string(),
+        p_before.to_plain_string(),
+        "re-age after chargeback preserves outstanding principal"
+    );
+    assert_eq!(
+        i_after.to_plain_string(),
+        i_before.to_plain_string(),
+        "re-age after chargeback preserves outstanding interest"
+    );
+}
