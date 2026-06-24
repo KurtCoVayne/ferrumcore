@@ -2514,3 +2514,105 @@ fn flat_mid_period_third_disbursement() {
     check_rp(&model, 2, "345.69", "12.50", "333.19", "333.19");
     check_rp(&model, 3, "345.69", "12.50", "333.19", "0.00");
 }
+
+/// `testExtraTermsDecliningBalanceWithFullyRepaidPeriods`: 1000 @ 12% DAYS_360/30, 4 periods. Pay the last period (MIR)
+/// and the first period early, then addRepaymentPeriods around the fully-paid periods — paid periods 0 and 3 stay
+/// fixed while the remaining balance re-amortizes across the unpaid + new periods.
+#[test]
+fn extra_terms_declining_with_fully_repaid_periods() {
+    let periods = [
+        (d(2024, Month::June, 1), d(2024, Month::July, 1)),
+        (d(2024, Month::July, 1), d(2024, Month::August, 1)),
+        (d(2024, Month::August, 1), d(2024, Month::September, 1)),
+        (d(2024, Month::September, 1), d(2024, Month::October, 1)),
+    ];
+    let jun1 = d(2024, Month::June, 1);
+    let jul1 = d(2024, Month::July, 1);
+    let sep1 = d(2024, Month::September, 1);
+    let oct1 = d(2024, Month::October, 1);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    let mut model = new_empty(
+        &periods,
+        &bd("12.0"),
+        DayCount::Days360Days30 { repay_every: 1 },
+        InterestMethod::DecliningBalance,
+        2,
+        RoundingMode::HalfEven,
+    );
+    model.add_disbursement(jun1, &m("1000.0"));
+    check_rp(&model, 0, "256.28", "10.00", "246.28", "753.72");
+    check_rp(&model, 3, "256.29", "2.54", "253.75", "0.00");
+
+    model.pay_principal(sep1, oct1, jun1, &m("256.29"));
+    model.pay_principal(jun1, jul1, jun1, &m("256.28"));
+    check_rp(&model, 0, "256.28", "0.00", "256.28", "487.43");
+    assert!(model.period_fully_paid(0));
+    check_rp(&model, 1, "256.28", "9.74", "246.54", "240.89");
+    check_rp(&model, 2, "243.30", "2.41", "240.89", "0.00");
+    check_rp(&model, 3, "256.29", "0.00", "256.29", "0.00");
+    assert!(model.period_fully_paid(3));
+
+    model.add_repayment_periods(d(2024, Month::June, 15), 1);
+    check_rp(&model, 1, "206.04", "9.74", "196.30", "291.13");
+    check_rp(&model, 4, "89.76", "1.76", "88.00", "0.00");
+
+    model.add_repayment_periods(d(2024, Month::June, 15), 2);
+    check_rp(&model, 1, "126.91", "9.74", "117.17", "370.26");
+    check_rp(&model, 5, "126.33", "1.25", "125.08", "0.00");
+    check_rp(&model, 6, "0.00", "0.00", "0.00", "0.00");
+}
+
+/// `testExtraTermsFlatWithFullyRepaidPeriods`: FLAT, 1000 @ 12% DAYS_360/30, 4 periods, EMI 260 (250 principal + 10 flat
+/// interest each). Pay the last period (MIR) and the first period in full (principal + interest), then addRepaymentPeriods
+/// around the fully-paid periods — the flat reallocation branch redistributes remaining principal across unpaid + new
+/// periods while paid periods 0 and 3 stay fixed, and a trailing interest-only stub period appears.
+#[test]
+fn extra_terms_flat_with_fully_repaid_periods() {
+    let periods = [
+        (d(2024, Month::June, 1), d(2024, Month::July, 1)),
+        (d(2024, Month::July, 1), d(2024, Month::August, 1)),
+        (d(2024, Month::August, 1), d(2024, Month::September, 1)),
+        (d(2024, Month::September, 1), d(2024, Month::October, 1)),
+    ];
+    let jun1 = d(2024, Month::June, 1);
+    let jul1 = d(2024, Month::July, 1);
+    let sep1 = d(2024, Month::September, 1);
+    let oct1 = d(2024, Month::October, 1);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    let mut model = new_empty(
+        &periods,
+        &bd("12.0"),
+        DayCount::Days360Days30 { repay_every: 1 },
+        InterestMethod::Flat,
+        2,
+        RoundingMode::HalfEven,
+    );
+    model.add_disbursement(jun1, &m("1000.0"));
+    check_rp(&model, 0, "260.00", "10.00", "250.00", "750.00");
+    check_rp(&model, 3, "260.00", "10.00", "250.00", "0.00");
+
+    // merchant refund on the last (fully repaid) installment, then early full repayment of period 0
+    model.pay_principal(sep1, oct1, jun1, &m("250.0"));
+    model.pay_interest(sep1, oct1, jun1, &m("10.0"));
+    check_rp(&model, 3, "260.00", "10.00", "250.00", "0.00");
+    assert!(model.period_fully_paid(3));
+
+    model.pay_principal(jun1, jul1, jun1, &m("250.0"));
+    model.pay_interest(jun1, jul1, jun1, &m("10.0"));
+    check_rp(&model, 0, "260.00", "10.00", "250.00", "500.00");
+    assert!(model.period_fully_paid(0));
+    check_rp(&model, 1, "260.00", "10.00", "250.00", "250.00");
+
+    model.add_repayment_periods(d(2024, Month::June, 15), 1);
+    check_rp(&model, 1, "210.00", "10.00", "200.00", "300.00");
+    check_rp(&model, 2, "210.00", "10.00", "200.00", "100.00");
+    check_rp(&model, 4, "110.00", "10.00", "100.00", "0.00");
+
+    model.add_repayment_periods(d(2024, Month::June, 15), 2);
+    check_rp(&model, 1, "152.86", "10.00", "142.86", "357.14");
+    check_rp(&model, 4, "152.86", "10.00", "142.86", "71.42");
+    check_rp(&model, 5, "81.42", "10.00", "71.42", "0.00");
+    check_rp(&model, 6, "10.00", "10.00", "0.00", "0.00");
+}

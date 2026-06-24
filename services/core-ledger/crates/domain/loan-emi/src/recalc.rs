@@ -744,16 +744,53 @@ impl Model {
         let count = (n - start) as i64;
         let period_emi = total.divided_by(&BigDecimal::from(count));
         let remainder = total.minus(&period_emi.multiplied_by(&BigDecimal::from(count)));
+        // Assign the flat EMI to every period; a period that has already been paid more than its share keeps its paid
+        // amount as EMI and the excess accumulates into `reallocation` (Java: per-period adjustment loop).
+        let mut reallocation = self.zero();
         for i in start..n {
             let emi = if i == n - 1 {
                 period_emi.plus(&remainder)
             } else {
                 period_emi.clone()
             };
-            self.periods[i].emi = emi.clone();
-            self.periods[i].original_emi = emi;
+            let threshold = emi
+                .plus(&self.total_credited_amount(i))
+                .plus(&self.periods[i].future_unrecognized_interest);
+            let total_paid = self.total_paid_amount(i);
+            if !is_less_than(&threshold, &total_paid) {
+                self.periods[i].emi = emi.clone();
+                self.periods[i].original_emi = emi;
+            } else {
+                let adjustment = total_paid.minus(&threshold);
+                reallocation = reallocation.plus(&adjustment);
+                self.periods[i].emi = total_paid.clone();
+                self.periods[i].original_emi = total_paid;
+            }
         }
         self.calculate_outstanding_balance();
+        // Redistribute the accumulated over-payment downward (Java: reversed reallocation pass), reducing later unpaid
+        // periods' EMI but never below their calculated due interest or already-paid EMI.
+        if reallocation.is_greater_than(&self.zero()) {
+            for i in (start..n).rev() {
+                if !reallocation.is_greater_than(&self.zero()) || self.is_fully_paid(i) {
+                    continue;
+                }
+                let minimum_new_emi = neg_to_zero(
+                    &self.periods[i].emi.minus(&reallocation),
+                    self.scale,
+                    self.mode,
+                );
+                let already_paid_emi = self
+                    .total_paid_amount(i)
+                    .minus(&self.total_credited_amount(i))
+                    .minus(&self.periods[i].future_unrecognized_interest);
+                let calc_due = self.calculated_due_interest(i);
+                let new_emi = money_max(&calc_due, &money_max(&minimum_new_emi, &already_paid_emi));
+                reallocation = reallocation.minus(&self.periods[i].emi.minus(&new_emi));
+                self.periods[i].emi = new_emi;
+            }
+            self.calculate_outstanding_balance();
+        }
     }
 
     /// `isEmpty()` — true when no period has a non-zero EMI (i.e. no disbursement has set the schedule yet).
