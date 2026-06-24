@@ -2815,13 +2815,77 @@ fn reage_equal_amortization_preserves_outstanding() {
         RoundingMode::HalfEven,
     );
 
-    // generation block (matches the Java golden exactly).
-    check_rp(&model, 0, "17.43", "1.33", "16.10", "83.90");
-    check_rp(&model, 1, "17.43", "1.05", "16.38", "67.52");
-    check_rp(&model, 2, "17.43", "0.90", "16.53", "50.99");
-    check_rp(&model, 3, "17.43", "0.66", "16.77", "34.22");
-    check_rp(&model, 4, "17.43", "0.46", "16.97", "17.25");
-    check_rp(&model, 5, "17.47", "0.22", "17.25", "0.00");
+    // generation block — per-interest-period rateFactor + calculatedDueInterest (Java golden
+    // ProgressiveEMICalculatorTest.java:4551-4557, including the (0,0) disbursement stub and the (0,1) real period).
+    check_ip(
+        &model, 0, 0, "17.43", "0.0", "0.0", "1.33", "16.10", "83.90",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.43",
+        "0.013315561644",
+        "1.3315561644",
+        "1.33",
+        "16.10",
+        "83.90",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.43",
+        "0.012456493151",
+        "1.04509977537",
+        "1.05",
+        "16.38",
+        "67.52",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.43",
+        "0.013315561644",
+        "0.899066722202",
+        "0.90",
+        "16.53",
+        "50.99",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.43",
+        "0.012886027397",
+        "0.657058536972",
+        "0.66",
+        "16.77",
+        "34.22",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.43",
+        "0.013315561644",
+        "0.455658519458",
+        "0.46",
+        "16.97",
+        "17.25",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "17.47",
+        "0.012886027397",
+        "0.222283972598",
+        "0.22",
+        "17.25",
+        "0.00",
+    );
 
     let maturity_before = model.periods.last().unwrap().due;
     let (p_before, i_before) = model.get_outstanding_amounts_till_date(maturity_before);
@@ -2859,40 +2923,131 @@ fn reage_equal_amortization_preserves_outstanding() {
     );
 }
 
-/// Re-age invariant **after payments** (the assertion in `test_transactionInMiddleOfPeriod_EQUAL_AMORTIZATION_FULL_INTEREST`,
-/// which the recalc day-count enum can't model exactly, but the invariant is day-count/payment-agnostic): re-aging a
-/// partially-paid loan still leaves the *remaining* total outstanding unchanged. Periods 0 and 1 are repaid, then the
-/// loan is re-aged on Apr 15 into 6 installments — stresses calculate_paid_balances_after_date +
-/// create_repayment_period_for_early_repaid with non-zero paid amounts.
+/// `test_transactionInMiddleOfPeriod_EQUAL_AMORTIZATION_FULL_INTEREST` (Java
+/// ProgressiveEMICalculatorTest.java:4584-4665): faithful 1:1 port. 100 @ 15.678% DAYS_365/ACTUAL generates the
+/// EMI-17.43 schedule, then a real payment sequence runs — on-time EMI on period 0, an MIR overpayment of period 1,
+/// MIR payments of the last installment (period 5 in full + 2.57 of period 4) all dated Feb 1, plus two offsetting
+/// balance corrections on Apr 1 / Apr 15 derived from `get_due_amounts` — before a FULL_INTEREST re-age on Apr 15 into
+/// 6 installments. Invariant (Java:4660-4663): outstanding principal/interest till maturity is unchanged by the re-age.
+/// Stresses calculate_paid_balances_after_date + create_repayment_period_for_early_repaid with non-zero paid amounts.
 #[test]
 fn reage_after_payments_preserves_outstanding() {
-    let mut model = new_declining_balance(
+    let mut model = new_declining_balance_with_day_count(
         &six_monthly(),
         &bd("100"),
-        &bd("7.0"),
-        1,
+        &bd("15.678"),
+        DayCount::ActualFixedYear { days_in_year: 365 },
         2,
         RoundingMode::HalfEven,
     );
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    // generation block — Java golden ProgressiveEMICalculatorTest.java:4610-4616.
+    check_ip(
+        &model, 0, 0, "17.43", "0.0", "0.0", "1.33", "16.10", "83.90",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.43",
+        "0.013315561644",
+        "1.3315561644",
+        "1.33",
+        "16.10",
+        "83.90",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.43",
+        "0.012456493151",
+        "1.04509977537",
+        "1.05",
+        "16.38",
+        "67.52",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.43",
+        "0.013315561644",
+        "0.899066722202",
+        "0.90",
+        "16.53",
+        "50.99",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.43",
+        "0.012886027397",
+        "0.657058536972",
+        "0.66",
+        "16.77",
+        "34.22",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.43",
+        "0.013315561644",
+        "0.455658519458",
+        "0.46",
+        "16.97",
+        "17.25",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "17.47",
+        "0.012886027397",
+        "0.222283972598",
+        "0.22",
+        "17.25",
+        "0.00",
+    );
+
     let jan1 = d(2024, Month::January, 1);
     let feb1 = d(2024, Month::February, 1);
     let mar1 = d(2024, Month::March, 1);
-    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+    let apr1 = d(2024, Month::April, 1);
+    let may1 = d(2024, Month::May, 1);
+    let jun1 = d(2024, Month::June, 1);
+    let jul1 = d(2024, Month::July, 1);
 
-    model.pay_principal(jan1, feb1, feb1, &m("16.43"));
-    model.pay_interest(jan1, feb1, feb1, &m("0.58"));
-    model.pay_principal(feb1, mar1, mar1, &m("16.52"));
-    model.pay_interest(feb1, mar1, mar1, &m("0.49"));
+    // repay EMI on first period due date (Java:4619-4622)
+    model.pay_principal(jan1, feb1, feb1, &m("16.1"));
+    model.pay_interest(jan1, feb1, feb1, &m("1.33"));
+
+    // repay EMI on first period due date - next installment for 2nd period (Java:4625-4626)
+    model.pay_principal(feb1, mar1, feb1, &m("17.43"));
+
+    // repay 20 for last installment on first period due date -- ie MIR (Java:4629-4632)
+    model.pay_principal(jun1, jul1, feb1, &m("17.43"));
+    model.pay_principal(may1, jun1, feb1, &m("2.57"));
+
+    // two offsetting balance corrections derived from getDueAmounts (Java:4634-4642)
+    let due_p = model
+        .get_due_amounts(mar1, apr1, apr1)
+        .unwrap()
+        .due_principal;
+    model.add_balance_correction(apr1, &due_p);
+    let due_p2 = model
+        .get_due_amounts(mar1, apr1, apr1)
+        .unwrap()
+        .due_principal;
+    model.add_balance_correction(d(2024, Month::April, 15), &m("0").minus(&due_p2));
 
     let maturity_before = model.periods.last().unwrap().due;
     let (p_before, i_before) = model.get_outstanding_amounts_till_date(maturity_before);
-    // sanity: 2 of 6 periods repaid, so outstanding principal < 100.
-    assert_eq!(
-        p_before.to_plain_string(),
-        "67.05",
-        "outstanding principal after 2 payments"
-    );
 
+    // re-age on Apr 15 into 6 installments from Apr 20 (Java:4644-4655)
     model.re_age_equal_amortization(
         d(2024, Month::April, 15),
         d(2024, Month::April, 20),
@@ -2903,15 +3058,16 @@ fn reage_after_payments_preserves_outstanding() {
 
     let maturity_after = model.periods.last().unwrap().due;
     let (p_after, i_after) = model.get_outstanding_amounts_till_date(maturity_after);
-    assert_eq!(
-        p_after.to_plain_string(),
-        p_before.to_plain_string(),
-        "outstanding principal unchanged by re-age (after payments)"
-    );
+    // Java:4660-4663 — outstanding interest/principal unchanged by the re-age.
     assert_eq!(
         i_after.to_plain_string(),
         i_before.to_plain_string(),
         "outstanding interest unchanged by re-age (after payments)"
+    );
+    assert_eq!(
+        p_after.to_plain_string(),
+        p_before.to_plain_string(),
+        "outstanding principal unchanged by re-age (after payments)"
     );
 }
 
@@ -3473,4 +3629,1246 @@ fn extra_terms_flat_with_fully_repaid_periods() {
     check_rp(&model, 4, "152.86", "10.00", "142.86", "71.42");
     check_rp(&model, 5, "81.42", "10.00", "71.42", "0.00");
     check_rp(&model, 6, "10.00", "10.00", "0.00", "0.00");
+}
+
+/// `test_payoff_on0115_*`: 100 @ 7% DAYS_360/30, payoff inside the FIRST period on Jan 15 (before its Feb 1 due date) —
+/// getDueAmounts forecasts the prorated payoff (16.75/0.26), then every period is paid early on Jan 15. Mirrors the
+/// on0215 payoff but with the payoff date in period 0.
+#[test]
+fn payoff_on_jan15() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1);
+    let mar1 = d(2024, Month::March, 1);
+    let apr1 = d(2024, Month::April, 1);
+    let may1 = d(2024, Month::May, 1);
+    let jun1 = d(2024, Month::June, 1);
+    let jul1 = d(2024, Month::July, 1);
+    let jan15 = d(2024, Month::January, 15);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    let due_on_due = model.get_due_amounts(jan1, feb1, feb1).unwrap();
+    assert_eq!(due_on_due.due_principal.to_plain_string(), "16.43");
+    assert_eq!(due_on_due.due_interest.to_plain_string(), "0.58");
+    let due_payoff = model.get_due_amounts(jan1, feb1, jan15).unwrap();
+    assert_eq!(due_payoff.due_principal.to_plain_string(), "16.75");
+    assert_eq!(due_payoff.due_interest.to_plain_string(), "0.26");
+
+    model.pay_principal(jan1, feb1, jan15, &m("16.75"));
+    model.pay_interest(jan1, feb1, jan15, &m("0.26"));
+    model.pay_principal(feb1, mar1, jan15, &m("17.01"));
+    model.pay_principal(mar1, apr1, jan15, &m("17.01"));
+    model.pay_principal(apr1, may1, jan15, &m("17.01"));
+    model.pay_principal(may1, jun1, jan15, &m("17.01"));
+
+    let due_last = model.get_due_amounts(jun1, jul1, jul1).unwrap();
+    assert_eq!(due_last.due_principal.to_plain_string(), "15.21");
+    assert_eq!(due_last.due_interest.to_plain_string(), "0.50");
+
+    check_ip(
+        &model, 0, 0, "17.01", "0.0", "0.0", "0.26", "16.75", "15.21",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.002634408602",
+        "0.2634408602",
+        "0.26",
+        "16.75",
+        "15.21",
+    );
+    check_ip(
+        &model,
+        0,
+        2,
+        "17.01",
+        "0.003198924731",
+        "0.0486556451585",
+        "0.26",
+        "16.75",
+        "15.21",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.0887249999948",
+        "0.00",
+        "17.01",
+        "15.21",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.0887249999949",
+        "0.00",
+        "17.01",
+        "15.21",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.0887249999949",
+        "0.00",
+        "17.01",
+        "15.21",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.0887249999949",
+        "0.00",
+        "17.01",
+        "15.21",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "15.71",
+        "0.005833333333",
+        "0.0887249999949",
+        "0.50",
+        "15.21",
+        "0.00",
+    );
+
+    model.pay_principal(jun1, jul1, jan15, &m("15.21"));
+
+    check_ip(&model, 0, 0, "17.01", "0.0", "0.0", "0.26", "16.75", "0.00");
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.002634408602",
+        "0.2634408602",
+        "0.26",
+        "16.75",
+        "0.00",
+    );
+    check_ip(
+        &model,
+        0,
+        2,
+        "17.01",
+        "0.003198924731",
+        "0.0",
+        "0.26",
+        "16.75",
+        "0.00",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.0",
+        "0.00",
+        "17.01",
+        "0.00",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.0",
+        "0.00",
+        "17.01",
+        "0.00",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.0",
+        "0.00",
+        "17.01",
+        "0.00",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.0",
+        "0.00",
+        "17.01",
+        "0.00",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "15.21",
+        "0.005833333333",
+        "0.0",
+        "0.00",
+        "15.21",
+        "0.00",
+    );
+}
+
+/// `test_leap_year_only_actual_no_effect_on_360_loan`: a 100 @ 7% DAYS_360/30 loan WITH the FEB_29_PERIOD_ONLY custom
+/// strategy set — the strategy is correctly ignored for 360-day loans, so the schedule equals the standard 360/30 one.
+#[test]
+fn leap_year_no_effect_on_360() {
+    let model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    check_ip(
+        &model, 0, 0, "17.01", "0.0", "0.0", "0.58", "16.43", "83.57",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.005833333333",
+        "0.5833333333",
+        "0.58",
+        "16.43",
+        "83.57",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.487491666639",
+        "0.49",
+        "16.52",
+        "67.05",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.391124999979",
+        "0.39",
+        "16.62",
+        "50.43",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.294174999983",
+        "0.29",
+        "16.72",
+        "33.71",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.196641666655",
+        "0.20",
+        "16.81",
+        "16.90",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "17.00",
+        "0.005833333333",
+        "0.0985833333276",
+        "0.10",
+        "16.90",
+        "0.00",
+    );
+}
+
+/// `test_chargeback_less_principal_*`: repay periods 0 and 1, then a chargeback (creditPrincipal 14.51 +
+/// creditInterest 0.49) on Mar 1 — the credited principal lands on period 2 (duePrincipal jumps to 31.04) and cascades.
+#[test]
+fn chargeback_less_principal() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1);
+    let mar1 = d(2024, Month::March, 1);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    model.pay_principal(jan1, feb1, feb1, &m("16.43"));
+    model.pay_interest(jan1, feb1, feb1, &m("0.58"));
+    model.pay_principal(feb1, mar1, mar1, &m("16.52"));
+    model.pay_interest(feb1, mar1, mar1, &m("0.49"));
+    model.credit_principal(mar1, &m("14.51"));
+    model.credit_interest(mar1, &m("0.49"));
+
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.487491666639",
+        "0.49",
+        "16.52",
+        "81.56",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.96576666664",
+        "0.97",
+        "31.04",
+        "50.52",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.294699999983",
+        "0.29",
+        "16.72",
+        "33.80",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.197166666655",
+        "0.20",
+        "16.81",
+        "16.99",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "17.09",
+        "0.005833333333",
+        "0.0991083333276",
+        "0.10",
+        "16.99",
+        "0.00",
+    );
+}
+
+/// `test_chargeback_less_principal_and_no_chargeback_interest_*`: as above but the chargeback credits principal only
+/// (creditPrincipal 15.0, no interest) — period 2 duePrincipal 31.53, interest unchanged.
+#[test]
+fn chargeback_less_principal_no_interest() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1);
+    let mar1 = d(2024, Month::March, 1);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    model.pay_principal(jan1, feb1, feb1, &m("16.43"));
+    model.pay_interest(jan1, feb1, feb1, &m("0.58"));
+    model.pay_principal(feb1, mar1, mar1, &m("16.52"));
+    model.pay_interest(feb1, mar1, mar1, &m("0.49"));
+    model.credit_principal(mar1, &m("15.0"));
+
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.487491666639",
+        "0.49",
+        "16.52",
+        "82.05",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.478624999974",
+        "0.48",
+        "31.53",
+        "50.52",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.294699999983",
+        "0.29",
+        "16.72",
+        "33.80",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.197166666655",
+        "0.20",
+        "16.81",
+        "16.99",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "17.09",
+        "0.005833333333",
+        "0.0991083333276",
+        "0.10",
+        "16.99",
+        "0.00",
+    );
+}
+
+/// `test_multi_disbursedAmt200_2ndOnDueDate_*`: 100 @ 9.4822% DAYS_360/30, then a 2nd 100 disbursement ON period 2's
+/// start date (Mar 1) — the merge path re-amortizes from Mar 1 onward (EMI 42.63), periods 0-1 unchanged.
+#[test]
+fn multi_disbursed_200_2nd_on_due_date() {
+    let mut model = new_empty(
+        &six_monthly(),
+        &bd("9.4822"),
+        DayCount::Days360Days30 { repay_every: 1 },
+        InterestMethod::DecliningBalance,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+    model.add_disbursement(d(2024, Month::January, 1), &m("100.0"));
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.13",
+        "0.007901833333",
+        "0.790183333301",
+        "0.79",
+        "16.34",
+        "83.66",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "17.13",
+        "0.007901833333",
+        "0.134331166661",
+        "0.13",
+        "17.00",
+        "0.00",
+    );
+
+    model.add_disbursement(d(2024, Month::March, 1), &m("100.0"));
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.13",
+        "0.007901833333",
+        "0.66106737664",
+        "0.66",
+        "16.47",
+        "167.19",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "42.63",
+        "0.007901833333",
+        "1.32110751494",
+        "1.32",
+        "41.31",
+        "125.88",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "42.63",
+        "0.007901833333",
+        "0.994682779959",
+        "0.99",
+        "41.64",
+        "84.24",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "42.63",
+        "0.007901833333",
+        "0.665650439972",
+        "0.67",
+        "41.96",
+        "42.28",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "42.61",
+        "0.007901833333",
+        "0.334089513318",
+        "0.33",
+        "42.28",
+        "0.00",
+    );
+}
+
+/// `test_multiDisbursedAmt300InSamePeriod_*`: 100 @ 9.4822% on Jan 1 then 200 on Jan 8 (mid first period) — period 0
+/// splits into stub + Jan1-Jan8 + Jan8-Feb1, EMI 51.33.
+#[test]
+fn multi_disbursed_300_in_same_period() {
+    let mut model = new_empty(
+        &six_monthly(),
+        &bd("9.4822"),
+        DayCount::Days360Days30 { repay_every: 1 },
+        InterestMethod::DecliningBalance,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+    model.add_disbursement(d(2024, Month::January, 1), &m("100"));
+    check_ip(
+        &model,
+        5,
+        0,
+        "17.13",
+        "0.007901833333",
+        "0.134331166661",
+        "0.13",
+        "17.00",
+        "0.00",
+    );
+
+    model.add_disbursement(d(2024, Month::January, 8), &m("200.0"));
+    check_ip(
+        &model, 0, 0, "51.33", "0.0", "0.0", "2.01", "49.32", "250.68",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "51.33",
+        "0.001784284946",
+        "0.178428494616",
+        "2.01",
+        "49.32",
+        "250.68",
+    );
+    check_ip(
+        &model,
+        0,
+        2,
+        "51.33",
+        "0.006117548387",
+        "1.8352645161",
+        "2.01",
+        "49.32",
+        "250.68",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "51.33",
+        "0.007901833333",
+        "1.98083157992",
+        "1.98",
+        "49.35",
+        "201.33",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "51.33",
+        "0.007901833333",
+        "1.59087610493",
+        "1.59",
+        "49.74",
+        "151.59",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "51.33",
+        "0.007901833333",
+        "1.19783891495",
+        "1.20",
+        "50.13",
+        "101.46",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "51.33",
+        "0.007901833333",
+        "0.801720009967",
+        "0.80",
+        "50.53",
+        "50.93",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "51.33",
+        "0.007901833333",
+        "0.40244037165",
+        "0.40",
+        "50.93",
+        "0.00",
+    );
+}
+
+/// `test_multiDisbursedAmt200InDifferentPeriod_*`: 100 @ 9.4822% on Jan 1 then 100 on Feb 15 (mid period 1) — period 1
+/// splits at Feb 15, EMI 37.53.
+#[test]
+fn multi_disbursed_200_in_different_period() {
+    let mut model = new_empty(
+        &six_monthly(),
+        &bd("9.4822"),
+        DayCount::Days360Days30 { repay_every: 1 },
+        InterestMethod::DecliningBalance,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+    model.add_disbursement(d(2024, Month::January, 1), &m("100.0"));
+    check_ip(
+        &model,
+        5,
+        0,
+        "17.13",
+        "0.007901833333",
+        "0.134331166661",
+        "0.13",
+        "17.00",
+        "0.00",
+    );
+
+    model.add_disbursement(d(2024, Month::February, 15), &m("100.0"));
+    check_ip(
+        &model,
+        1,
+        0,
+        "37.53",
+        "0.003814678161",
+        "0.31913597493",
+        "1.07",
+        "36.46",
+        "147.20",
+    );
+    check_ip(
+        &model,
+        1,
+        1,
+        "37.53",
+        "0.004087155172",
+        "0.75064691889",
+        "1.07",
+        "36.46",
+        "147.20",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "37.53",
+        "0.007901833333",
+        "1.16314986662",
+        "1.16",
+        "36.37",
+        "110.83",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "37.53",
+        "0.007901833333",
+        "0.875760188295",
+        "0.88",
+        "36.65",
+        "74.18",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "37.53",
+        "0.007901833333",
+        "0.586157996641",
+        "0.59",
+        "36.94",
+        "37.24",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "37.53",
+        "0.007901833333",
+        "0.294264273321",
+        "0.29",
+        "37.24",
+        "0.00",
+    );
+}
+
+/// `test_disbursedAmt100_dayInYears364_daysInMonthActual_repayEvery2Week`: 100 @ 9.4822% DAYS_364, three 14-day
+/// periods from 2024-01-01 — rate factor 9.4822%·14/364 = 0.003647, EMI 33.57.
+#[test]
+fn disbursed_364_repay_every_2_week() {
+    let periods = [
+        (d(2024, Month::January, 1), d(2024, Month::January, 15)),
+        (d(2024, Month::January, 15), d(2024, Month::January, 29)),
+        (d(2024, Month::January, 29), d(2024, Month::February, 12)),
+    ];
+    let model = new_declining_balance_with_day_count(
+        &periods,
+        &bd("100"),
+        &bd("9.4822"),
+        DayCount::ActualFixedYear { days_in_year: 364 },
+        2,
+        RoundingMode::HalfEven,
+    );
+    check_ip(
+        &model, 0, 0, "33.57", "0.0", "0.0", "0.36", "33.21", "66.79",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "33.57",
+        "0.003647000000",
+        "0.3647",
+        "0.36",
+        "33.21",
+        "66.79",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "33.57",
+        "0.003647000000",
+        "0.24358313",
+        "0.24",
+        "33.33",
+        "33.46",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "33.58",
+        "0.003647000000",
+        "0.12202862",
+        "0.12",
+        "33.46",
+        "0.00",
+    );
+}
+
+/// `test_reschedule_interest_on0201_4per_*`: 100 @ 7% DAYS_360/30, change rate to 4% effective Feb 2 (no payments) —
+/// EMI drops to 16.88 from period 1 onward.
+#[test]
+fn reschedule_interest_on_feb2_clean() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    model.change_interest_rate(d(2024, Month::February, 2), &bd("4.0"));
+    check_ip(
+        &model, 0, 0, "17.01", "0.0", "0.0", "0.58", "16.43", "83.57",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.005833333333",
+        "0.5833333333",
+        "0.58",
+        "16.43",
+        "83.57",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "16.88",
+        "0.003333333333",
+        "0.278566666639",
+        "0.28",
+        "16.60",
+        "66.97",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "16.88",
+        "0.003333333333",
+        "0.223233333311",
+        "0.22",
+        "16.66",
+        "50.31",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "16.88",
+        "0.003333333333",
+        "0.167699999983",
+        "0.17",
+        "16.71",
+        "33.60",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "16.88",
+        "0.003333333333",
+        "0.111999999989",
+        "0.11",
+        "16.77",
+        "16.83",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "16.89",
+        "0.003333333333",
+        "0.0560999999943",
+        "0.06",
+        "16.83",
+        "0.00",
+    );
+}
+
+/// `test_reschedule_interest_on0201_2nd_EMI_not_changeable_*`: pay period 0 (interest+principal) and period 1 principal
+/// (16.90) on Feb 1, then change rate to 4% effective Feb 2 — the prepaid period 1 EMI is not lowered (stays 17.01).
+#[test]
+fn reschedule_interest_on_feb2_with_prepaid() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1);
+    let mar1 = d(2024, Month::March, 1);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+    model.pay_interest(jan1, feb1, feb1, &m("0.58"));
+    model.pay_principal(jan1, feb1, feb1, &m("16.43"));
+    model.pay_principal(feb1, mar1, feb1, &m("16.90"));
+    model.change_interest_rate(d(2024, Month::February, 2), &bd("4.0"));
+    check_ip(
+        &model, 0, 0, "17.01", "0.0", "0.0", "0.58", "16.43", "66.67",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.005833333333",
+        "0.5833333333",
+        "0.58",
+        "16.43",
+        "66.67",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.003333333333",
+        "0.222233333311",
+        "0.00",
+        "17.01",
+        "66.56",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "16.83",
+        "0.003333333333",
+        "0.221866666644",
+        "0.44",
+        "16.39",
+        "50.17",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "16.83",
+        "0.003333333333",
+        "0.167233333317",
+        "0.17",
+        "16.66",
+        "33.51",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "16.83",
+        "0.003333333333",
+        "0.111699999989",
+        "0.11",
+        "16.72",
+        "16.79",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "16.85",
+        "0.003333333333",
+        "0.0559666666611",
+        "0.06",
+        "16.79",
+        "0.00",
+    );
+}
+
+/// `ProgressiveEMICalculatorTest.testFlatDaily_firstRepaymentPeriodWithoutPrevious_doesNotThrowOnDisbursement`
+/// (Java line 3424, nested class `InterestTypeFlatAndCalculationPeriodDaily` whose @BeforeEach (Java line 3412) sets
+/// InterestMethod.FLAT, InterestCalculationPeriodMethod.DAILY, allowPartialPeriodInterestCalculation=true; the test
+/// itself sets 12%, ACTUAL/ACTUAL day counts, 4 monthly periods, disburse 700.0). The Java test only asserts
+/// addDisbursement does not throw on a schedule whose first repayment period has no previous period. We additionally
+/// assert the first-period EMI equals the golden 181.94 from the sibling `testFlatDaily_1_Month_Actual_Actual`
+/// (Java line 3463), which uses the identical settings and disbursement.
+#[test]
+fn flat_daily_first_period_without_previous_does_not_throw_on_disbursement() {
+    let periods = [
+        (d(2024, Month::January, 1), d(2024, Month::February, 1)),
+        (d(2024, Month::February, 1), d(2024, Month::March, 1)),
+        (d(2024, Month::March, 1), d(2024, Month::April, 1)),
+        (d(2024, Month::April, 1), d(2024, Month::May, 1)),
+    ];
+    let jan1 = d(2024, Month::January, 1);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    let mut model = new_empty(
+        &periods,
+        &bd("12.0"),
+        DayCount::ActualActual {
+            recognition_on_disbursement: false,
+        },
+        InterestMethod::Flat,
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    // The point of the Java test: this must not panic on a first period that has no previous period.
+    model.add_disbursement(jan1, &m("700.0"));
+
+    // Golden first-period values from testFlatDaily_1_Month_Actual_Actual (Java line 3463): EMI 181.94.
+    check_rp(&model, 0, "181.94", "7.11", "174.83", "525.17");
+}
+
+/// `ProgressiveEMICalculatorTest.test_generateInterestScheduleModel` (Java line 187): a pure structural
+/// generation check. The Java assertions are: model non-null; loanProductRelatedDetail non-null;
+/// installmentAmountInMultiplesOf == null; repaymentPeriods non-null; repaymentPeriods().size() == 4;
+/// getLoanTermInDays() == 121 (2024-01-01 .. 2024-05-01 = 31+29+31+30 days). In Rust the model carries the
+/// generated periods directly (no separate "schedule model" object), so the reproducible parts are the period
+/// count and the loan-term span. There is no getLoanTermInDays() getter on `Model`, so the term is checked here
+/// directly from the period endpoints.
+#[test]
+fn generate_interest_schedule_model_structural() {
+    let periods = [
+        (d(2024, Month::January, 1), d(2024, Month::February, 1)),
+        (d(2024, Month::February, 1), d(2024, Month::March, 1)),
+        (d(2024, Month::March, 1), d(2024, Month::April, 1)),
+        (d(2024, Month::April, 1), d(2024, Month::May, 1)),
+    ];
+    // No disbursement applied (Java generatePeriodInterestScheduleModel only builds the period structure).
+    let model = new_empty(
+        &periods,
+        &bd("0"),
+        DayCount::Days360Days30 { repay_every: 1 },
+        InterestMethod::DecliningBalance,
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    // repaymentPeriods().size() == 4 (Java line 205).
+    assert_eq!(model.periods.len(), 4);
+    // getLoanTermInDays() == 121 (Java line 206): span from first period start to last period due.
+    let term_days =
+        (model.periods.last().unwrap().due - model.periods.first().unwrap().from).whole_days();
+    assert_eq!(term_days, 121);
+}
+
+/// `test_transactionInMiddleOfPeriod_stringOnNextDueDate_EQUAL_EQUAL_AMORTIZATION_PAYABLE_INTEREST`
+/// (ProgressiveEMICalculatorTest.java lines 4869-4950): 100 @ 15.678% DAYS_365/ACTUAL, six monthly periods.
+/// On-time period 0, MIR overpayments of periods 1/5/4 booked on Feb 1, two balance corrections (apply then negate
+/// the Mar->Apr due principal via getDueAmounts) on Apr 1 / Apr 15. Re-age (PAYABLE_INTEREST, full_interest=false)
+/// with transaction date Apr 15 and re-age start May 1. Invariant: outstanding-till-transaction-date before the
+/// re-age == outstanding-till-maturity after it. Generation block mirrors checkPeriod (java 4896-4902).
+#[test]
+fn reage_payable_mid_period_string_on_next_due_date() {
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1);
+    let mar1 = d(2024, Month::March, 1);
+    let apr1 = d(2024, Month::April, 1);
+    let may1 = d(2024, Month::May, 1);
+    let jun1 = d(2024, Month::June, 1);
+    let jul1 = d(2024, Month::July, 1);
+    let apr15 = d(2024, Month::April, 15);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    let mut model = new_declining_balance_with_day_count(
+        &six_monthly(),
+        &bd("100"),
+        &bd("15.678"),
+        DayCount::ActualFixedYear { days_in_year: 365 },
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    // Generation block — java checkPeriod lines 4896-4902 (7-arg ip form: interestDue passed as calc & cumulated).
+    check_ip(&model, 0, 0, "17.43", "0.0", "0.0", "1.33", "16.10", "83.90");
+    check_ip(&model, 0, 1, "17.43", "0.013315561644", "1.3315561644", "1.33", "16.10", "83.90");
+    check_ip(&model, 1, 0, "17.43", "0.012456493151", "1.04509977537", "1.05", "16.38", "67.52");
+    check_ip(&model, 2, 0, "17.43", "0.013315561644", "0.899066722202", "0.90", "16.53", "50.99");
+    check_ip(&model, 3, 0, "17.43", "0.012886027397", "0.657058536972", "0.66", "16.77", "34.22");
+    check_ip(&model, 4, 0, "17.43", "0.013315561644", "0.455658519458", "0.46", "16.97", "17.25");
+    check_ip(&model, 5, 0, "17.47", "0.012886027397", "0.222283972598", "0.22", "17.25", "0.00");
+
+    // repay EMI on first period due date
+    model.pay_principal(jan1, feb1, feb1, &m("16.1"));
+    model.pay_interest(jan1, feb1, feb1, &m("1.33"));
+    // repay EMI on first period due date - next installment for 2nd period
+    model.pay_principal(feb1, mar1, feb1, &m("17.43"));
+    // repay last/penultimate installments on first period due date -- ie MIR
+    model.pay_principal(jun1, jul1, feb1, &m("17.43"));
+    model.pay_principal(may1, jun1, feb1, &m("2.57"));
+
+    let dp1 = model
+        .get_due_amounts(mar1, apr1, apr1)
+        .unwrap()
+        .due_principal;
+    model.add_balance_correction(apr1, &dp1);
+    let dp2 = model
+        .get_due_amounts(mar1, apr1, apr1)
+        .unwrap()
+        .due_principal;
+    model.add_balance_correction(apr15, &m("0").minus(&dp2));
+
+    let (p_before, i_before) = model.get_outstanding_amounts_till_date(apr15);
+    model.re_age_equal_amortization(apr15, may1, 6, 1, false);
+    let maturity_after = model.periods.last().unwrap().due;
+    let (p_after, i_after) = model.get_outstanding_amounts_till_date(maturity_after);
+
+    assert_eq!(
+        p_after.to_plain_string(),
+        p_before.to_plain_string(),
+        "PAYABLE_INTEREST re-age preserves outstanding principal"
+    );
+    assert_eq!(
+        i_after.to_plain_string(),
+        i_before.to_plain_string(),
+        "PAYABLE_INTEREST re-age preserves outstanding interest"
+    );
+}
+
+/// `test_transactionOnMaturityDate_stringAfterMaturityDate_EQUAL_EQUAL_AMORTIZATION_PAYABLE_INTEREST`
+/// (ProgressiveEMICalculatorTest.java lines 4952-5023): same 100 @ 15.678% DAYS_365 schedule and the same on-time +
+/// MIR payment sequence, but NO balance corrections. Re-age (PAYABLE_INTEREST) with transaction date on the maturity
+/// date (Jul 1) and re-age start after maturity (Jul 15). Invariant: outstanding-till-transaction-date before the
+/// re-age == outstanding-till-maturity after it. Generation block mirrors checkPeriod (java 4979-4985).
+#[test]
+fn reage_payable_transaction_on_maturity_string_after_maturity() {
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1);
+    let mar1 = d(2024, Month::March, 1);
+    let may1 = d(2024, Month::May, 1);
+    let jun1 = d(2024, Month::June, 1);
+    let jul1 = d(2024, Month::July, 1);
+    let jul15 = d(2024, Month::July, 15);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    let mut model = new_declining_balance_with_day_count(
+        &six_monthly(),
+        &bd("100"),
+        &bd("15.678"),
+        DayCount::ActualFixedYear { days_in_year: 365 },
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    // Generation block — java checkPeriod lines 4979-4985.
+    check_ip(&model, 0, 0, "17.43", "0.0", "0.0", "1.33", "16.10", "83.90");
+    check_ip(&model, 0, 1, "17.43", "0.013315561644", "1.3315561644", "1.33", "16.10", "83.90");
+    check_ip(&model, 1, 0, "17.43", "0.012456493151", "1.04509977537", "1.05", "16.38", "67.52");
+    check_ip(&model, 2, 0, "17.43", "0.013315561644", "0.899066722202", "0.90", "16.53", "50.99");
+    check_ip(&model, 3, 0, "17.43", "0.012886027397", "0.657058536972", "0.66", "16.77", "34.22");
+    check_ip(&model, 4, 0, "17.43", "0.013315561644", "0.455658519458", "0.46", "16.97", "17.25");
+    check_ip(&model, 5, 0, "17.47", "0.012886027397", "0.222283972598", "0.22", "17.25", "0.00");
+
+    // repay EMI on first period due date
+    model.pay_principal(jan1, feb1, feb1, &m("16.1"));
+    model.pay_interest(jan1, feb1, feb1, &m("1.33"));
+    // repay EMI on first period due date - next installment for 2nd period
+    model.pay_principal(feb1, mar1, feb1, &m("17.43"));
+    // repay last/penultimate installments on first period due date -- ie MIR
+    model.pay_principal(jun1, jul1, feb1, &m("17.43"));
+    model.pay_principal(may1, jun1, feb1, &m("2.57"));
+
+    let transaction_date = jul1;
+    let (p_before, i_before) = model.get_outstanding_amounts_till_date(transaction_date);
+    model.re_age_equal_amortization(transaction_date, jul15, 6, 1, false);
+    let maturity_after = model.periods.last().unwrap().due;
+    let (p_after, i_after) = model.get_outstanding_amounts_till_date(maturity_after);
+
+    assert_eq!(
+        p_after.to_plain_string(),
+        p_before.to_plain_string(),
+        "PAYABLE_INTEREST re-age preserves outstanding principal"
+    );
+    assert_eq!(
+        i_after.to_plain_string(),
+        i_before.to_plain_string(),
+        "PAYABLE_INTEREST re-age preserves outstanding interest"
+    );
+}
+
+/// `test_transactionAfterMaturityDate_EQUAL_EQUAL_AMORTIZATION_PAYABLE_INTEREST`
+/// (ProgressiveEMICalculatorTest.java lines 5025-5096): same 100 @ 15.678% DAYS_365 schedule + on-time/MIR payment
+/// sequence, NO balance corrections. Re-age (PAYABLE_INTEREST) with transaction date AFTER maturity (Jul 10) and
+/// re-age start Jul 15. Invariant: outstanding-till-transaction-date before == outstanding-till-maturity after.
+/// Generation block mirrors checkPeriod (java 5052-5058).
+#[test]
+fn reage_payable_transaction_after_maturity() {
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1);
+    let mar1 = d(2024, Month::March, 1);
+    let may1 = d(2024, Month::May, 1);
+    let jun1 = d(2024, Month::June, 1);
+    let jul1 = d(2024, Month::July, 1);
+    let jul10 = d(2024, Month::July, 10);
+    let jul15 = d(2024, Month::July, 15);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    let mut model = new_declining_balance_with_day_count(
+        &six_monthly(),
+        &bd("100"),
+        &bd("15.678"),
+        DayCount::ActualFixedYear { days_in_year: 365 },
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    // Generation block — java checkPeriod lines 5052-5058.
+    check_ip(&model, 0, 0, "17.43", "0.0", "0.0", "1.33", "16.10", "83.90");
+    check_ip(&model, 0, 1, "17.43", "0.013315561644", "1.3315561644", "1.33", "16.10", "83.90");
+    check_ip(&model, 1, 0, "17.43", "0.012456493151", "1.04509977537", "1.05", "16.38", "67.52");
+    check_ip(&model, 2, 0, "17.43", "0.013315561644", "0.899066722202", "0.90", "16.53", "50.99");
+    check_ip(&model, 3, 0, "17.43", "0.012886027397", "0.657058536972", "0.66", "16.77", "34.22");
+    check_ip(&model, 4, 0, "17.43", "0.013315561644", "0.455658519458", "0.46", "16.97", "17.25");
+    check_ip(&model, 5, 0, "17.47", "0.012886027397", "0.222283972598", "0.22", "17.25", "0.00");
+
+    // repay EMI on first period due date
+    model.pay_principal(jan1, feb1, feb1, &m("16.1"));
+    model.pay_interest(jan1, feb1, feb1, &m("1.33"));
+    // repay EMI on first period due date - next installment for 2nd period
+    model.pay_principal(feb1, mar1, feb1, &m("17.43"));
+    // repay last/penultimate installments on first period due date -- ie MIR
+    model.pay_principal(jun1, jul1, feb1, &m("17.43"));
+    model.pay_principal(may1, jun1, feb1, &m("2.57"));
+
+    let transaction_date = jul10;
+    let (p_before, i_before) = model.get_outstanding_amounts_till_date(transaction_date);
+    model.re_age_equal_amortization(transaction_date, jul15, 6, 1, false);
+    let maturity_after = model.periods.last().unwrap().due;
+    let (p_after, i_after) = model.get_outstanding_amounts_till_date(maturity_after);
+
+    assert_eq!(
+        p_after.to_plain_string(),
+        p_before.to_plain_string(),
+        "PAYABLE_INTEREST re-age preserves outstanding principal"
+    );
+    assert_eq!(
+        i_after.to_plain_string(),
+        i_before.to_plain_string(),
+        "PAYABLE_INTEREST re-age preserves outstanding interest"
+    );
 }
