@@ -1941,25 +1941,41 @@ fn outstanding_amounts_till_date() {
     );
 }
 
-/// Re-age invariant (the assertion in `test_transactionInMiddleOfPeriod_EQUAL_AMORTIZATION_FULL_INTEREST_…_noInterestRecalc`):
-/// re-aging a loan with no payments must NOT change the total outstanding (principal + interest) — it only redistributes
-/// it across the new equal-amortization installments. Verified here on a fresh 100 @ 7% DAYS_360/30 loan re-aged on
-/// Apr 15 into 6 installments from Apr 20. Exercises the full re-age subsystem (accelerate maturity, close periods,
-/// append equal-amortization re-aged periods carrying the outstanding) + getOutstandingAmountsTillDate. (The Java golden
-/// uses DAYS_365/15.678%, which the recalc day-count enum does not model; the asserted invariant is day-count-agnostic.)
+/// `test_transactionInMiddleOfPeriod_EQUAL_AMORTIZATION_FULL_INTEREST_noTransactionTilDate_noInterestRecalc`: the exact
+/// golden — 100 @ 15.678% DAYS_365/ACTUAL generates EMI 17.43 (interests 1.33/1.05/0.90/0.66/0.46/0.22), and re-aging
+/// on Apr 15 into 6 equal-amortization installments from Apr 20 (no payments) leaves the total outstanding
+/// (100.00 / 4.62) unchanged. Now uses the real DAYS_365 day count via recalc's ActualFixedYear.
 #[test]
 fn reage_equal_amortization_preserves_outstanding() {
-    let mut model = new_declining_balance(
+    let mut model = new_declining_balance_with_day_count(
         &six_monthly(),
         &bd("100"),
-        &bd("7.0"),
-        1,
+        &bd("15.678"),
+        DayCount::ActualFixedYear { days_in_year: 365 },
         2,
         RoundingMode::HalfEven,
     );
 
+    // generation block (matches the Java golden exactly).
+    check_rp(&model, 0, "17.43", "1.33", "16.10", "83.90");
+    check_rp(&model, 1, "17.43", "1.05", "16.38", "67.52");
+    check_rp(&model, 2, "17.43", "0.90", "16.53", "50.99");
+    check_rp(&model, 3, "17.43", "0.66", "16.77", "34.22");
+    check_rp(&model, 4, "17.43", "0.46", "16.97", "17.25");
+    check_rp(&model, 5, "17.47", "0.22", "17.25", "0.00");
+
     let maturity_before = model.periods.last().unwrap().due;
     let (p_before, i_before) = model.get_outstanding_amounts_till_date(maturity_before);
+    assert_eq!(
+        p_before.to_plain_string(),
+        "100.00",
+        "outstanding principal before re-age"
+    );
+    assert_eq!(
+        i_before.to_plain_string(),
+        "4.62",
+        "outstanding interest before re-age"
+    );
 
     model.re_age_equal_amortization(
         d(2024, Month::April, 15),

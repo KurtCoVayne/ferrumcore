@@ -38,6 +38,9 @@ pub enum DayCount {
     Days360Days30 { repay_every: i64 },
     /// ACTUAL / ACTUAL (days-in-month ACTUAL, days-in-year = `Year.length`), with the year-boundary partial split.
     ActualActual { recognition_on_disbursement: bool },
+    /// ACTUAL days-in-month with a fixed days-in-year (e.g. DAYS_365 / DAYS_364): `rate × actualDays / daysInYear`,
+    /// no year-boundary split.
+    ActualFixedYear { days_in_year: i64 },
 }
 
 /// One interest period (`InterestPeriod`). All money at currency scale; rate factors full precision.
@@ -226,6 +229,18 @@ impl Model {
             DayCount::ActualActual {
                 recognition_on_disbursement,
             } => self.actual_actual_rate_factor(rate, ip_from, ip_due, recognition_on_disbursement),
+            DayCount::ActualFixedYear { days_in_year } => {
+                let one = BigDecimal::from(1);
+                rate_factor_by_repayment_period(
+                    &self.mc,
+                    rate,
+                    &BigDecimal::from((ip_due - ip_from).whole_days()),
+                    &one,
+                    &BigDecimal::from(days_in_year),
+                    &one,
+                    &one,
+                )
+            }
         }
     }
 
@@ -277,6 +292,18 @@ impl Model {
             DayCount::ActualActual {
                 recognition_on_disbursement,
             } => self.actual_actual_rate_factor(rate, ip_from, rp_due, recognition_on_disbursement),
+            DayCount::ActualFixedYear { days_in_year } => {
+                let one = BigDecimal::from(1);
+                rate_factor_by_repayment_period(
+                    &self.mc,
+                    rate,
+                    &BigDecimal::from((rp_due - ip_from).whole_days()),
+                    &one,
+                    &BigDecimal::from(days_in_year),
+                    &one,
+                    &one,
+                )
+            }
         }
     }
 
