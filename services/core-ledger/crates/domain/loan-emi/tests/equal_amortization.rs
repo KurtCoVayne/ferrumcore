@@ -124,3 +124,36 @@ fn calculate_value_negative_adjusted_branch() {
     assert_eq!(r.calculate_value(0).to_plain_string(), "100.00"); // 150 − 100×1 = 50 ≥ 0 → value
     assert_eq!(r.calculate_value(2).to_plain_string(), "0.00"); // 150 − 100×3 = −150 < 0 → zero
 }
+
+/// `EqualAmortizationValue.test_AmortizationTotalIsLessThanInstallmentNumber` (test 5103): 0.04 over 6 installments —
+/// value 0.01, adjusted value 0.01+(-0.02)=-0.01 (< 0) → degenerate branch pays 0.01 until 0.04 is consumed, then 0.00.
+#[test]
+fn amortization_total_less_than_installment_number() {
+    let r = calculate_equal_amortization_values(&money("0.04"), 6);
+    let expected = ["0.01", "0.01", "0.01", "0.01", "0.00", "0.00"];
+    for (i, e) in expected.iter().enumerate() {
+        assert_eq!(r.calculate_value(i as i64).to_plain_string(), *e, "installment {i}");
+    }
+}
+
+/// `EqualAmortizationValue.test_AmortizationIsJustBiggerThanInstallmentNumber` (test 5116): 0.07 over 6 — value 0.01,
+/// adjusted value 0.01+0.01=0.02 (≥ 0) → first five 0.01, last installment 0.02.
+#[test]
+fn amortization_just_bigger_than_installment_number() {
+    let r = calculate_equal_amortization_values(&money("0.07"), 6);
+    let expected = ["0.01", "0.01", "0.01", "0.01", "0.01", "0.02"];
+    for (i, e) in expected.iter().enumerate() {
+        assert_eq!(r.calculate_value(i as i64).to_plain_string(), *e, "installment {i}");
+    }
+}
+
+/// `EqualAmortizationValue.test_AmortizationNonEdgeCase` (test 5129): 0.59 over 6 — value 0.10, adjusted value
+/// 0.10+(-0.01)=0.09 (≥ 0) → first five 0.10, last installment 0.09.
+#[test]
+fn amortization_non_edge_case() {
+    let r = calculate_equal_amortization_values(&money("0.59"), 6);
+    let expected = ["0.10", "0.10", "0.10", "0.10", "0.10", "0.09"];
+    for (i, e) in expected.iter().enumerate() {
+        assert_eq!(r.calculate_value(i as i64).to_plain_string(), *e, "installment {i}");
+    }
+}
