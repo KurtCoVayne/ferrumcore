@@ -1247,38 +1247,492 @@ fn interest_pause_whole_month() {
 /// Feb 4 with the Feb1-Feb4 segment paused.
 #[test]
 fn interest_pause_first_day_of_month() {
-    let mut model =
-        new_declining_balance(&six_monthly(), &bd("100"), &bd("7.0"), 1, 2, RoundingMode::HalfEven);
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
     model.apply_interest_pause(d(2024, Month::February, 1), d(2024, Month::February, 5));
 
-    check_ip(&model, 0, 0, "17.01", "0.0", "0.0", "0.56", "16.45", "83.55");
-    check_ip(&model, 0, 1, "17.01", "0.00564516129", "0.564516129", "0.56", "16.45", "83.55");
-    check_ip(&model, 0, 2, "17.01", "0.000188172043", "0.0", "0.56", "16.45", "83.55");
-    check_ip(&model, 1, 0, "17.01", "0.000804597701", "0.0", "0.42", "16.59", "66.96");
-    check_ip(&model, 1, 1, "17.01", "0.005028735632", "0.420150862055", "0.42", "16.59", "66.96");
-    check_ip(&model, 2, 0, "17.01", "0.005833333333", "0.390599999978", "0.39", "16.62", "50.34");
-    check_ip(&model, 3, 0, "17.01", "0.005833333333", "0.293649999983", "0.29", "16.72", "33.62");
-    check_ip(&model, 4, 0, "17.01", "0.005833333333", "0.196116666655", "0.20", "16.81", "16.81");
-    check_ip(&model, 5, 0, "16.91", "0.005833333333", "0.0980583333276", "0.10", "16.81", "0.00");
+    check_ip(
+        &model, 0, 0, "17.01", "0.0", "0.0", "0.56", "16.45", "83.55",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.00564516129",
+        "0.564516129",
+        "0.56",
+        "16.45",
+        "83.55",
+    );
+    check_ip(
+        &model,
+        0,
+        2,
+        "17.01",
+        "0.000188172043",
+        "0.0",
+        "0.56",
+        "16.45",
+        "83.55",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.000804597701",
+        "0.0",
+        "0.42",
+        "16.59",
+        "66.96",
+    );
+    check_ip(
+        &model,
+        1,
+        1,
+        "17.01",
+        "0.005028735632",
+        "0.420150862055",
+        "0.42",
+        "16.59",
+        "66.96",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.390599999978",
+        "0.39",
+        "16.62",
+        "50.34",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.293649999983",
+        "0.29",
+        "16.72",
+        "33.62",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.196116666655",
+        "0.20",
+        "16.81",
+        "16.81",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "16.91",
+        "0.005833333333",
+        "0.0980583333276",
+        "0.10",
+        "16.81",
+        "0.00",
+    );
 }
 
 /// `test_interestPauseTwoWholeMonthsAmt100_*`: pause Feb 1 – Mar 31 spanning periods 1 and 2 entirely — period 1
 /// accrues no interest (full pause), period 2 carries only the Mar 31–Apr 1 tail, cascading balances and tail EMI.
 #[test]
 fn interest_pause_two_whole_months() {
-    let mut model =
-        new_declining_balance(&six_monthly(), &bd("100"), &bd("7.0"), 1, 2, RoundingMode::HalfEven);
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
     model.apply_interest_pause(d(2024, Month::February, 1), d(2024, Month::March, 31));
 
-    check_ip(&model, 0, 0, "17.01", "0.0", "0.0", "0.56", "16.45", "83.55");
-    check_ip(&model, 0, 1, "17.01", "0.00564516129", "0.564516129", "0.56", "16.45", "83.55");
-    check_ip(&model, 0, 2, "17.01", "0.000188172043", "0.0", "0.56", "16.45", "83.55");
-    check_ip(&model, 1, 0, "17.01", "0.005833333333", "0.0", "0.00", "17.01", "66.54");
-    check_ip(&model, 2, 0, "17.01", "0.00564516129", "0.0", "0.01", "17.00", "49.54");
-    check_ip(&model, 2, 1, "17.01", "0.000188172043", "0.0125209677412", "0.01", "17.00", "49.54");
-    check_ip(&model, 3, 0, "17.01", "0.005833333333", "0.288983333317", "0.29", "16.72", "32.82");
-    check_ip(&model, 4, 0, "17.01", "0.005833333333", "0.191449999989", "0.19", "16.82", "16.00");
-    check_ip(&model, 5, 0, "16.09", "0.005833333333", "0.0933333333279", "0.09", "16.00", "0.00");
+    check_ip(
+        &model, 0, 0, "17.01", "0.0", "0.0", "0.56", "16.45", "83.55",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.00564516129",
+        "0.564516129",
+        "0.56",
+        "16.45",
+        "83.55",
+    );
+    check_ip(
+        &model,
+        0,
+        2,
+        "17.01",
+        "0.000188172043",
+        "0.0",
+        "0.56",
+        "16.45",
+        "83.55",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.0",
+        "0.00",
+        "17.01",
+        "66.54",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.00564516129",
+        "0.0",
+        "0.01",
+        "17.00",
+        "49.54",
+    );
+    check_ip(
+        &model,
+        2,
+        1,
+        "17.01",
+        "0.000188172043",
+        "0.0125209677412",
+        "0.01",
+        "17.00",
+        "49.54",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.288983333317",
+        "0.29",
+        "16.72",
+        "32.82",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.191449999989",
+        "0.19",
+        "16.82",
+        "16.00",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "16.09",
+        "0.005833333333",
+        "0.0933333333279",
+        "0.09",
+        "16.00",
+        "0.00",
+    );
+}
+
+/// `test_interestPauseBorderedByPeriod_Amt100_*`: pause Feb 1 – Mar 1 covering exactly period 1 (both endpoints on
+/// period boundaries) — period 1 accrues no interest (full EMI to principal), cascading the later balances.
+#[test]
+fn interest_pause_bordered_by_period() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    model.apply_interest_pause(d(2024, Month::February, 1), d(2024, Month::March, 1));
+
+    check_ip(
+        &model, 0, 0, "17.01", "0.0", "0.0", "0.56", "16.45", "83.55",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.00564516129",
+        "0.564516129",
+        "0.56",
+        "16.45",
+        "83.55",
+    );
+    check_ip(
+        &model,
+        0,
+        2,
+        "17.01",
+        "0.000188172043",
+        "0.0",
+        "0.56",
+        "16.45",
+        "83.55",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.0",
+        "0.00",
+        "17.01",
+        "66.54",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.388149999977",
+        "0.39",
+        "16.62",
+        "49.92",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.291199999983",
+        "0.29",
+        "16.72",
+        "33.20",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.193666666656",
+        "0.19",
+        "16.82",
+        "16.38",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "16.48",
+        "0.005833333333",
+        "0.0955499999946",
+        "0.10",
+        "16.38",
+        "0.00",
+    );
+}
+
+/// `test_interestPauseOnTheFirstAndThirdRepaymentPeriodAmt100_*`: two separate pauses (Jan 2 – Feb 1 and Mar 2 – Apr 1)
+/// zero out periods 0 and 2 entirely — confirms multiple non-adjacent pauses compose correctly.
+#[test]
+fn interest_pause_first_and_third_period() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    model.apply_interest_pause(d(2024, Month::January, 2), d(2024, Month::February, 1));
+    model.apply_interest_pause(d(2024, Month::March, 2), d(2024, Month::April, 1));
+
+    check_ip(
+        &model, 0, 0, "17.01", "0.0", "0.00", "0.00", "17.01", "82.99",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.005833333333",
+        "0.00",
+        "0.00",
+        "17.01",
+        "82.99",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.484108333307",
+        "0.48",
+        "16.53",
+        "66.46",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.00",
+        "0.00",
+        "17.01",
+        "49.45",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.288458333317",
+        "0.29",
+        "16.72",
+        "32.73",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.190924999989",
+        "0.19",
+        "16.82",
+        "15.91",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "16.00",
+        "0.005833333333",
+        "0.0928083333279",
+        "0.09",
+        "15.91",
+        "0.00",
+    );
+}
+
+/// `test_interestPauseOnTheFirstDayOfFirstPeriodAmt100_*`: pause Jan 2 – Jan 10 inside the first period — splits
+/// period 0 into a stub, a paused segment, and a real segment carrying the reduced first-period interest (0.41).
+#[test]
+fn interest_pause_first_day_of_first_period() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    model.apply_interest_pause(d(2024, Month::January, 2), d(2024, Month::January, 10));
+
+    check_ip(
+        &model, 0, 0, "17.01", "0.0", "0.0", "0.41", "16.60", "83.40",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.001693548387",
+        "0.0",
+        "0.41",
+        "16.60",
+        "83.40",
+    );
+    check_ip(
+        &model,
+        0,
+        2,
+        "17.01",
+        "0.004139784946",
+        "0.413978494600",
+        "0.41",
+        "16.60",
+        "83.40",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.486499999972",
+        "0.49",
+        "16.52",
+        "66.88",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.390133333310",
+        "0.39",
+        "16.62",
+        "50.26",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.293183333317",
+        "0.29",
+        "16.72",
+        "33.54",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.195649999989",
+        "0.20",
+        "16.81",
+        "16.73",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "16.83",
+        "0.005833333333",
+        "0.0975916666611",
+        "0.10",
+        "16.73",
+        "0.00",
+    );
 }
 
 /// `test_disbursedAmt1000_actual_actual_repayEvery1Month_verify_due_principal_amounts`: 1000 @ 25% ACTUAL/ACTUAL over
