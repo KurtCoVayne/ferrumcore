@@ -1735,6 +1735,371 @@ fn interest_pause_first_day_of_first_period() {
     );
 }
 
+/// `test_interestPauseAndExistedMultipleInterestPeriodsAmt100_*`: two same-rate `changeInterestRate` calls (Feb 11,
+/// Feb 21) pre-split period 1 into multiple interest periods, then a pause Feb 5–15 overlaps them — confirms the
+/// pause-split and rate-change-split machinery compose (period 1 ends with 5 interest periods).
+#[test]
+fn interest_pause_and_existed_multiple_interest_periods() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    model.change_interest_rate(d(2024, Month::February, 11), &bd("7.0"));
+    model.change_interest_rate(d(2024, Month::February, 21), &bd("7.0"));
+    model.apply_interest_pause(d(2024, Month::February, 5), d(2024, Month::February, 15));
+
+    check_ip(
+        &model, 0, 0, "17.01", "0.0", "0.0", "0.58", "16.43", "83.57",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.005833333333",
+        "0.5833333333",
+        "0.58",
+        "16.43",
+        "83.57",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.000603448276",
+        "0.0504301724109",
+        "0.30",
+        "16.71",
+        "66.86",
+    );
+    check_ip(
+        &model,
+        1,
+        1,
+        "17.01",
+        "0.001206896552",
+        "0.0",
+        "0.30",
+        "16.71",
+        "66.86",
+    );
+    check_ip(
+        &model,
+        1,
+        2,
+        "17.01",
+        "0.001005747126",
+        "0.0",
+        "0.30",
+        "16.71",
+        "66.86",
+    );
+    check_ip(
+        &model,
+        1,
+        3,
+        "17.01",
+        "0.001005747126",
+        "0.0840502873475",
+        "0.30",
+        "16.71",
+        "66.86",
+    );
+    check_ip(
+        &model,
+        1,
+        4,
+        "17.01",
+        "0.002011494253",
+        "0.168100574723",
+        "0.30",
+        "16.71",
+        "66.86",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.390016666645",
+        "0.39",
+        "16.62",
+        "50.24",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.29306666665",
+        "0.29",
+        "16.72",
+        "33.52",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.195533333322",
+        "0.20",
+        "16.81",
+        "16.71",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "16.81",
+        "0.005833333333",
+        "0.0974749999944",
+        "0.10",
+        "16.71",
+        "0.00",
+    );
+}
+
+/// `test_interestPauseBetweenRepaymentPeriodsAndExistedMultipleInterestPeriods_*`: four same-rate `changeInterestRate`
+/// calls (Feb 6/21, Mar 6/21) pre-split periods 1 and 2, then a pause Feb 10 – Mar 10 spans both — confirms the
+/// composition across two repayment periods each carrying multiple interest periods.
+#[test]
+fn interest_pause_between_repayment_periods_and_existed_multiple() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    model.change_interest_rate(d(2024, Month::February, 6), &bd("7.0"));
+    model.change_interest_rate(d(2024, Month::February, 21), &bd("7.0"));
+    model.change_interest_rate(d(2024, Month::March, 6), &bd("7.0"));
+    model.change_interest_rate(d(2024, Month::March, 21), &bd("7.0"));
+    model.apply_interest_pause(d(2024, Month::February, 10), d(2024, Month::March, 10));
+
+    check_ip(
+        &model, 0, 0, "17.01", "0.0", "0.0", "0.58", "16.43", "83.57",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.005833333333",
+        "0.5833333333",
+        "0.58",
+        "16.43",
+        "83.57",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.000804597701",
+        "0.0672402298812",
+        "0.13",
+        "16.88",
+        "66.69",
+    );
+    check_ip(
+        &model,
+        1,
+        1,
+        "17.01",
+        "0.000804597701",
+        "0.0672402298824",
+        "0.13",
+        "16.88",
+        "66.69",
+    );
+    check_ip(
+        &model,
+        1,
+        2,
+        "17.01",
+        "0.002212643678",
+        "0.0",
+        "0.13",
+        "16.88",
+        "66.69",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.000752688172",
+        "0.0",
+        "0.28",
+        "16.73",
+        "49.96",
+    );
+    check_ip(
+        &model,
+        2,
+        1,
+        "17.01",
+        "0.000940860215",
+        "0.0",
+        "0.28",
+        "16.73",
+        "49.96",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.291433333317",
+        "0.29",
+        "16.72",
+        "33.24",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.193899999989",
+        "0.19",
+        "16.82",
+        "16.42",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "16.52",
+        "0.005833333333",
+        "0.095783333328",
+        "0.10",
+        "16.42",
+        "0.00",
+    );
+}
+
+/// `test_interestPauseOnFirstDayOfMonthAndExistedMultipleInterestPeriods_*`: same-rate `changeInterestRate` on Feb 1
+/// (a period boundary) and Feb 6, then a pause Feb 1–5 — the no-op rate changes collapse and the result matches the
+/// plain firstDayOfMonth pause.
+#[test]
+fn interest_pause_first_day_of_month_and_existed_multiple() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    model.change_interest_rate(d(2024, Month::February, 1), &bd("7.0"));
+    model.change_interest_rate(d(2024, Month::February, 6), &bd("7.0"));
+    model.apply_interest_pause(d(2024, Month::February, 1), d(2024, Month::February, 5));
+
+    check_ip(
+        &model, 0, 0, "17.01", "0.0", "0.0", "0.56", "16.45", "83.55",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.00564516129",
+        "0.564516129",
+        "0.56",
+        "16.45",
+        "83.55",
+    );
+    check_ip(
+        &model,
+        0,
+        2,
+        "17.01",
+        "0.000188172043",
+        "0.0",
+        "0.56",
+        "16.45",
+        "83.55",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "17.01",
+        "0.000804597701",
+        "0.0",
+        "0.42",
+        "16.59",
+        "66.96",
+    );
+    check_ip(
+        &model,
+        1,
+        1,
+        "17.01",
+        "0.005028735632",
+        "0.420150862055",
+        "0.42",
+        "16.59",
+        "66.96",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.390599999978",
+        "0.39",
+        "16.62",
+        "50.34",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.293649999983",
+        "0.29",
+        "16.72",
+        "33.62",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "17.01",
+        "0.005833333333",
+        "0.196116666655",
+        "0.20",
+        "16.81",
+        "16.81",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "16.91",
+        "0.005833333333",
+        "0.0980583333276",
+        "0.10",
+        "16.81",
+        "0.00",
+    );
+}
+
 /// `test_disbursedAmt1000_actual_actual_repayEvery1Month_verify_due_principal_amounts`: 1000 @ 25% ACTUAL/ACTUAL over
 /// 12 monthly periods (crossing into 2025), paying each period's principal upfront on the disbursement date. Confirms
 /// the ACTUAL/ACTUAL day count is wired into the recalc rate factors (EMI 95.02), with interest zero (paid before
