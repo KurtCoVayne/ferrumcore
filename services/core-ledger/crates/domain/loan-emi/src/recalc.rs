@@ -284,7 +284,7 @@ impl Model {
                 &self.mc,
                 rate,
                 &BigDecimal::from(30),
-                &BigDecimal::from(repay_every),
+                &self.calculate_period_ratio(rp_from, rp_due, repay_every),
                 &BigDecimal::from(360),
                 &BigDecimal::from((rp_due - ip_from).whole_days()),
                 &BigDecimal::from((rp_due - rp_from).whole_days()),
@@ -305,6 +305,60 @@ impl Model {
                 )
             }
         }
+    }
+
+    /// `calculateSeedDate` — the schedule's seed for period-ratio counting: the model start when the period sits on the
+    /// regular monthly cadence, else the period's own from date.
+    fn calculate_seed_date(&self, rp_from: Date, rp_due: Date, repay_every: i64) -> Date {
+        let Some(start) = self.periods.first().map(|p| p.from) else {
+            return rp_from;
+        };
+        let mut mult = 1i64;
+        let mut calc = add_months(start, mult);
+        while calc < rp_due {
+            mult += 1;
+            calc = add_months(start, mult);
+        }
+        if calc == rp_due && add_months(calc, -repay_every) == rp_from {
+            start
+        } else {
+            rp_from
+        }
+    }
+
+    /// `calculatePeriodRatio` (MONTHS) — the number of repayment-cadence months the period spans relative to the seed
+    /// (1 for a regular monthly period; fractional/large for an extended period after a reschedule).
+    fn calculate_period_ratio(&self, rp_from: Date, rp_due: Date, repay_every: i64) -> BigDecimal {
+        let seed = self.calculate_seed_date(rp_from, rp_due, repay_every);
+        let num_between = months_between(seed, rp_from);
+        let mut mult = num_between + 1;
+        let mut from = rp_from;
+        while from < rp_due {
+            from = add_months(seed, mult);
+            if from <= rp_due {
+                mult += 1;
+            } else {
+                let full_period_date = from;
+                mult -= num_between + 1;
+                let from2 = add_months(seed, mult);
+                let diff_days = (rp_due - from2).whole_days();
+                let full_days = (full_period_date - from2).whole_days();
+                let frac = if full_days == 0 {
+                    BigDecimal::from(0)
+                } else {
+                    self.mc
+                        .div(&BigDecimal::from(diff_days), &BigDecimal::from(full_days))
+                };
+                return frac + BigDecimal::from(mult);
+            }
+        }
+        BigDecimal::from(mult - num_between - 1)
+    }
+
+    /// `generateNextRepaymentDate` (no calendar): add `repay_every` months. The month-end seed clamp only differs for
+    /// seed days > 28, which the supported reschedule cases don't use.
+    fn generate_next_repayment_date(&self, last: Date, repay_every: i64) -> Date {
+        add_months(last, repay_every)
     }
 
     /// `calculateRateFactorForRepaymentPeriod` — set both rate factors on every interest period of `rp_idx`.
@@ -1341,6 +1395,49 @@ impl Model {
         }
     }
 
+    /// `changeDueDate(targetDueDate, newDueDate, fixedLength)` — move the period containing `target_due` to end at
+    /// `new_due`, shift every later period forward (each due = previous due + repayEvery months), with the LAST period's
+    /// due overridden to `repaymentStart + (fixedLength + variationDays) months` when `fixed_length` is set (the
+    /// `calculateDateForFixedLength` quirk, where `variationDays = (newDue − targetDue) in days` is added as months).
+    /// Then recompute rate factors / outstanding / tail EMI (the per-period EMI is NOT re-annuitized).
+    pub fn change_due_date(&mut self, target_due: Date, new_due: Date, fixed_length: Option<i64>) {
+        let Some(target_idx) = self.find_period_containing(target_due) else {
+            return;
+        };
+        let repay_every = match self.day_count {
+            DayCount::Days360Days30 { repay_every } => repay_every,
+            _ => 1,
+        };
+        self.periods[target_idx].due = new_due;
+        if let Some(last) = self.periods[target_idx].interest_periods.last_mut() {
+            last.due = new_due;
+        }
+        let last_idx = self.periods.len() - 1;
+        let start = self.periods[0].from;
+        let variation_days = (new_due - target_due).whole_days();
+        let mut cur_new_due = new_due;
+        for i in (target_idx + 1)..self.periods.len() {
+            self.periods[i].from = cur_new_due;
+            let mut next = self.generate_next_repayment_date(cur_new_due, repay_every);
+            if i == last_idx
+                && let Some(fl) = fixed_length
+            {
+                next = add_months(start, fl + variation_days);
+            }
+            self.periods[i].due = next;
+            if let Some(first) = self.periods[i].interest_periods.first_mut() {
+                first.from = cur_new_due;
+            }
+            if let Some(lastip) = self.periods[i].interest_periods.last_mut() {
+                lastip.due = next;
+            }
+            cur_new_due = next;
+        }
+        self.calculate_rate_factor_for_periods();
+        self.calculate_outstanding_balance();
+        self.calculate_last_unpaid_emi();
+    }
+
     /// `applyInterestPause(fromDate, endDate)` — pause interest accrual over `[fromDate, endDate)`: split the affected
     /// repayment period(s) at the pause boundaries and mark the inner interest period paused (its rate factor is still
     /// computed but its calculated due interest is zero), then recompute rate factors / outstanding / tail EMI (the EMI
@@ -1723,6 +1820,17 @@ impl Model {
         self.interest_rates.push((zero_from, BigDecimal::from(0)));
         self.calculate_last_unpaid_emi();
     }
+}
+
+/// Whole months between `a` and `b` (`ChronoUnit.MONTHS.between` semantics): `(b.year−a.year)*12 + (b.month−a.month)`,
+/// minus 1 when `b`'s day-of-month is before `a`'s.
+fn months_between(a: Date, b: Date) -> i64 {
+    let mut months = (i64::from(b.year()) - i64::from(a.year())) * 12
+        + (i64::from(u8::from(b.month())) - i64::from(u8::from(a.month())));
+    if b.day() < a.day() {
+        months -= 1;
+    }
+    months
 }
 
 /// `getRepaymentPeriodDate(MONTHS, n, date)` — add `n` months, clamping the day to the target month's length. This is

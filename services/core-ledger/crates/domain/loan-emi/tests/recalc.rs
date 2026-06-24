@@ -2236,3 +2236,49 @@ fn reage_payable_after_mid_period_chargeback() {
         "PAYABLE re-age after chargeback preserves outstanding interest"
     );
 }
+
+/// `test_reschedule_disbursedAmt100_dayInYears360_daysInMonth30_repayEvery1Month`: changeDueDate moves the period
+/// containing Feb 1 (= period 0, first-inclusive) to due Mar 1, extending period 0 to 2 months and shifting periods 1-4
+/// forward by a month; the last period (period 5) is extended to Jul1-2024 → 2026-06-01 via the fixedLength override
+/// (`start + (fixedLength=0 + variationDays=29) months`), so its interest grows to 2.35 via the 23-month periodRatio.
+#[test]
+fn change_due_date_reschedule() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    model.change_due_date(
+        d(2024, Month::February, 1),
+        d(2024, Month::March, 1),
+        Some(0),
+    );
+
+    // period 0 extended to 2 months (interest 1.17); its real interest period.
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.005833333333",
+        "1.1666666667",
+        "1.17",
+        "15.84",
+        "84.16",
+    );
+    check_rp(&model, 1, "17.01", "0.49", "16.52", "67.64");
+    check_rp(&model, 2, "17.01", "0.39", "16.62", "51.02");
+    check_rp(&model, 3, "17.01", "0.30", "16.71", "34.31");
+    check_rp(&model, 4, "17.01", "0.20", "16.81", "17.50");
+    // period 5 extended ~23 months → interest 2.35, EMI 19.85.
+    check_rp(&model, 5, "19.85", "2.35", "17.50", "0.00");
+    assert_eq!(
+        model.periods[5].due,
+        d(2026, Month::June, 1),
+        "rp5 due extended"
+    );
+}
