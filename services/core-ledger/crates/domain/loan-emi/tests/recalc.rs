@@ -2392,3 +2392,46 @@ fn flat_recalc_multi_disbursement() {
     check_rp(&model, 2, "260.00", "10.00", "250.00", "250.00");
     check_rp(&model, 3, "260.00", "10.00", "250.00", "0.00");
 }
+
+/// `testExtraTermsFlat`: 1000 @ 12% FLAT (sameAsRepayment → flat interest 10/period; modeled here via DAYS_360/30 which
+/// gives the same 0.01 rate factor). After generation (EMI 343.33 over 3 periods), addRepaymentPeriods extends the
+/// schedule and re-amortizes the remaining balance over the new period set (EMI 232.22 over 3, then 121.11 over 4).
+#[test]
+fn extra_terms_flat_add_repayment_periods() {
+    let periods = [
+        (d(2024, Month::June, 1), d(2024, Month::July, 1)),
+        (d(2024, Month::July, 1), d(2024, Month::August, 1)),
+        (d(2024, Month::August, 1), d(2024, Month::September, 1)),
+    ];
+    let jun1 = d(2024, Month::June, 1);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    let mut model = new_empty(
+        &periods,
+        &bd("12.0"),
+        DayCount::Days360Days30 { repay_every: 1 },
+        InterestMethod::Flat,
+        2,
+        RoundingMode::HalfEven,
+    );
+    model.add_disbursement(jun1, &m("1000.0"));
+    check_rp(&model, 0, "343.33", "10.00", "333.33", "666.67");
+    check_rp(&model, 1, "343.33", "10.00", "333.33", "333.34");
+    check_rp(&model, 2, "343.34", "10.00", "333.34", "0.00");
+
+    // add 1 extra repayment period → re-amortize periods 1..3.
+    model.add_repayment_periods(d(2024, Month::July, 2), 1);
+    check_rp(&model, 0, "343.33", "10.00", "333.33", "666.67");
+    check_rp(&model, 1, "232.22", "10.00", "222.22", "444.45");
+    check_rp(&model, 2, "232.22", "10.00", "222.22", "222.23");
+    check_rp(&model, 3, "232.23", "10.00", "222.23", "0.00");
+
+    // add 2 more → re-amortize periods 2..5.
+    model.add_repayment_periods(d(2024, Month::August, 2), 2);
+    check_rp(&model, 0, "343.33", "10.00", "333.33", "666.67");
+    check_rp(&model, 1, "232.22", "10.00", "222.22", "444.45");
+    check_rp(&model, 2, "121.11", "10.00", "111.11", "333.34");
+    check_rp(&model, 3, "121.11", "10.00", "111.11", "222.23");
+    check_rp(&model, 4, "121.11", "10.00", "111.11", "111.12");
+    check_rp(&model, 5, "121.12", "10.00", "111.12", "0.00");
+}

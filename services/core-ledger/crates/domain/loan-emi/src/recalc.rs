@@ -726,7 +726,21 @@ impl Model {
         }
         let last_ip = self.periods[start].interest_periods.len().saturating_sub(1);
         let total_disbursed = self.total_disbursed_till(start, last_ip);
-        let total = total_disbursed.plus(&sum_interest);
+        // already-repaid principals (the previous period's disbursed-minus-outstanding) are excluded when the related
+        // periods don't start at the first period (e.g. after addRepaymentPeriods / a re-amortize from a later date).
+        let already_repaid = if start > 0 {
+            let prev = start - 1;
+            let prev_total =
+                self.total_disbursed_till(prev, self.periods[prev].interest_periods.len());
+            neg_to_zero(
+                &prev_total.minus(&self.outstanding_loan_balance(prev)),
+                self.scale,
+                self.mode,
+            )
+        } else {
+            self.zero()
+        };
+        let total = total_disbursed.plus(&sum_interest).minus(&already_repaid);
         let count = (n - start) as i64;
         let period_emi = total.divided_by(&BigDecimal::from(count));
         let remainder = total.minus(&period_emi.multiplied_by(&BigDecimal::from(count)));
@@ -1498,6 +1512,78 @@ impl Model {
         self.calculate_rate_factor_for_periods();
         self.calculate_outstanding_balance();
         self.calculate_last_unpaid_emi();
+    }
+
+    /// `addRepaymentPeriods(submittedOnDate, count)` — append `count` new repayment periods (each `repayEvery` months
+    /// after the schedule, generated from the seed = first period's from date), then re-amortize from the period after
+    /// the one containing `submittedOnDate − 1 day`.
+    pub fn add_repayment_periods(&mut self, submitted_on: Date, count: usize) {
+        let Some(start_date) = self.periods.first().map(|p| p.from) else {
+            return;
+        };
+        let repay_every = match self.day_count {
+            DayCount::Days360Days30 { repay_every } => repay_every,
+            _ => 1,
+        };
+        let existing = self.periods.len();
+        let (total_disbursed, total_capitalized) = match self.periods.last() {
+            Some(last) => (
+                last.total_disbursed_amount.clone(),
+                last.total_capitalized_income_amount.clone(),
+            ),
+            None => (self.zero(), self.zero()),
+        };
+        let zero = self.zero();
+        for i in existing..(existing + count) {
+            let from = add_months(start_date, i as i64 * repay_every);
+            let due = add_months(start_date, (i as i64 + 1) * repay_every);
+            self.periods.push(RepaymentPeriod {
+                from,
+                due,
+                interest_periods: vec![InterestPeriod {
+                    from,
+                    due,
+                    rate_factor: BigDecimal::from(0),
+                    rate_factor_till_period_due_date: BigDecimal::from(0),
+                    credited_principal: zero.clone(),
+                    credited_interest: zero.clone(),
+                    disbursement_amount: zero.clone(),
+                    balance_correction_amount: zero.clone(),
+                    capitalized_income_principal: zero.clone(),
+                    outstanding_loan_balance: zero.clone(),
+                    is_paused: false,
+                }],
+                emi: zero.clone(),
+                original_emi: zero.clone(),
+                paid_principal: zero.clone(),
+                paid_interest: zero.clone(),
+                future_unrecognized_interest: zero.clone(),
+                total_disbursed_amount: total_disbursed.clone(),
+                total_capitalized_income_amount: total_capitalized.clone(),
+                interest_payment_grace: false,
+                is_interest_moved_upward: false,
+                is_interest_moved_downward: false,
+                re_aged: false,
+                re_aged_early_repayment_holder: false,
+                credited_principal_moved_due_reage: zero.clone(),
+                credited_interest_moved_due_reage: zero.clone(),
+                fixed_interest: zero.clone(),
+            });
+        }
+        let effective = submitted_on - time::Duration::days(1);
+        if let Some(rp_idx) = self.change_outstanding_and_split(effective, &zero, &zero, &zero) {
+            let start = self.related_start(self.effective_due_date(rp_idx, effective));
+            self.calculate_rate_factor_for_periods();
+            if self.interest_method == InterestMethod::Flat {
+                self.calculate_emi_on_actual_model_flat(start);
+            } else {
+                self.calculate_outstanding_balance();
+                self.calculate_emi_on_actual_model(start);
+                self.calculate_outstanding_balance();
+                self.calculate_last_unpaid_emi();
+                self.check_and_adjust_emi_if_needed(start);
+            }
+        }
     }
 
     /// `applyInterestPause(fromDate, endDate)` — pause interest accrual over `[fromDate, endDate)`: split the affected
