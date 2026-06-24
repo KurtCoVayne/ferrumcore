@@ -889,3 +889,89 @@ fn emi_calculator_performance_fresh_disbursement() {
         }
     }
 }
+
+/// `test_sameAsRepayment_days_repay_every_6_periods_5` (FLAT, SAME_AS_REPAYMENT_PERIOD): 1000 @ 12.2%, ACTUAL/ACTUAL,
+/// five 6-day periods from 2024-01-01 — flat interest 1000·0.122·6/366 = 2.00 per period, EMI 202.00, principal 200.00.
+#[test]
+fn same_as_repayment_days_repay_every_6_periods_5() {
+    let periods: Vec<(Date, Date)> = (0..5)
+        .map(|i| {
+            (
+                d(2024, Month::January, 1 + (i * 6) as u8),
+                d(2024, Month::January, 1 + ((i + 1) * 6) as u8),
+            )
+        })
+        .collect();
+    let model = generate_flat(
+        &periods,
+        &bd("1000"),
+        &bd("12.2"),
+        DayCountKind::ActualActual {
+            recognition_on_disbursement: false,
+        },
+        2,
+        RoundingMode::HalfEven,
+    );
+    for i in 0..5 {
+        let out = format!("{}.00", 800 - i * 200);
+        check_period(&model, i as usize, "202.00", "2.00", "200.00", &out);
+    }
+}
+
+/// `test_sameAsRepayment_week_repay_every_1_periods_10` (FLAT, SAME_AS_REPAYMENT_PERIOD): 1000 @ 5.2%, DAYS_364, ten
+/// weekly periods from 2024-01-01 — flat interest 1000·0.052·7/364 = 1.00 per period, EMI 101.00, principal 100.00.
+#[test]
+fn same_as_repayment_week_repay_every_1_periods_10() {
+    let periods: Vec<(Date, Date)> = (0..10)
+        .map(|i| {
+            (
+                d(2024, Month::January, 1) + time::Duration::weeks(i),
+                d(2024, Month::January, 1) + time::Duration::weeks(i + 1),
+            )
+        })
+        .collect();
+    let model = generate_flat(
+        &periods,
+        &bd("1000"),
+        &bd("5.2"),
+        DayCountKind::ActualFixedYear { days_in_year: 364 },
+        2,
+        RoundingMode::HalfEven,
+    );
+    for i in 0..10 {
+        let out = format!("{}.00", 900 - i * 100);
+        check_period(&model, i as usize, "101.00", "1.00", "100.00", &out);
+    }
+}
+
+/// `test_sameAsRepayment_month_repay_every_2_periods_8` (FLAT, SAME_AS_REPAYMENT_PERIOD): 1000 @ 12%, eight 2-month
+/// periods from 2024-01-01 — sameAsRepayment monthly rate factor = rate·repayEvery/12 = 0.02 → flat interest 20.00 per
+/// period, EMI 145.00, principal 125.00.
+#[test]
+fn same_as_repayment_month_repay_every_2_periods_8() {
+    let periods: Vec<(Date, Date)> = (0..8)
+        .map(|i| (add_months_2(i), add_months_2(i + 1)))
+        .collect();
+    let model = generate_flat(
+        &periods,
+        &bd("1000"),
+        &bd("12.0"),
+        DayCountKind::SameAsRepaymentMonths { repay_every: 2 },
+        2,
+        RoundingMode::HalfEven,
+    );
+    for i in 0..8 {
+        let out = format!("{}.00", 875 - i * 125);
+        check_period(&model, i as usize, "145.00", "20.00", "125.00", &out);
+    }
+}
+
+/// 2024-01-01 plus `2*k` months (clamped to month length), for the 2-month sameAsRepayment schedule above.
+fn add_months_2(k: i64) -> Date {
+    let total = (2 * k) as i64;
+    let base_month0 = 0i64 + total; // January = 0-based 0
+    let year = 2024 + (base_month0 / 12) as i32;
+    let month0 = (base_month0 % 12) as u8;
+    let month = Month::try_from(month0 + 1).unwrap();
+    Date::from_calendar_date(year, month, 1).unwrap()
+}

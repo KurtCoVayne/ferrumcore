@@ -132,7 +132,11 @@ fn amortization_total_less_than_installment_number() {
     let r = calculate_equal_amortization_values(&money("0.04"), 6);
     let expected = ["0.01", "0.01", "0.01", "0.01", "0.00", "0.00"];
     for (i, e) in expected.iter().enumerate() {
-        assert_eq!(r.calculate_value(i as i64).to_plain_string(), *e, "installment {i}");
+        assert_eq!(
+            r.calculate_value(i as i64).to_plain_string(),
+            *e,
+            "installment {i}"
+        );
     }
 }
 
@@ -143,7 +147,11 @@ fn amortization_just_bigger_than_installment_number() {
     let r = calculate_equal_amortization_values(&money("0.07"), 6);
     let expected = ["0.01", "0.01", "0.01", "0.01", "0.01", "0.02"];
     for (i, e) in expected.iter().enumerate() {
-        assert_eq!(r.calculate_value(i as i64).to_plain_string(), *e, "installment {i}");
+        assert_eq!(
+            r.calculate_value(i as i64).to_plain_string(),
+            *e,
+            "installment {i}"
+        );
     }
 }
 
@@ -154,6 +162,10 @@ fn amortization_non_edge_case() {
     let r = calculate_equal_amortization_values(&money("0.59"), 6);
     let expected = ["0.10", "0.10", "0.10", "0.10", "0.10", "0.09"];
     for (i, e) in expected.iter().enumerate() {
-        assert_eq!(r.calculate_value(i as i64).to_plain_string(), *e, "installment {i}");
+        assert_eq!(
+            r.calculate_value(i as i64).to_plain_string(),
+            *e,
+            "installment {i}"
+        );
     }
 }
