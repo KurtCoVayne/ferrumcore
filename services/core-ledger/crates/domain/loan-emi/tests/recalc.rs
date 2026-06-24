@@ -2320,3 +2320,37 @@ fn change_due_date_two_reschedules() {
     check_rp(&model, 4, "17.01", "0.20", "16.81", "17.90");
     check_rp(&model, 5, "20.41", "2.51", "17.90", "0.00");
 }
+
+/// `test_reschedule_partial_period_disbursedAmt100_*`: changeDueDate moves the period containing Mar 1 (= period 1) to a
+/// NON-month-aligned due date Apr 15, extending period 1 to a partial ~2.5-month period (interest 1.20 via a fractional
+/// periodRatio ≈ 2.467). Exercises calculate_period_ratio on a non-month-aligned period.
+#[test]
+fn change_due_date_partial_period() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    model.change_due_date(d(2024, Month::March, 1), d(2024, Month::April, 15), Some(0));
+
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.01",
+        "0.005833333333",
+        "0.5833333333",
+        "0.58",
+        "16.43",
+        "83.57",
+    );
+    check_rp(&model, 1, "17.01", "1.20", "15.81", "67.76");
+    check_rp(&model, 2, "17.01", "0.40", "16.61", "51.15");
+    check_rp(&model, 3, "17.01", "0.30", "16.71", "34.44");
+    check_rp(&model, 4, "17.01", "0.20", "16.81", "17.63");
+    check_rp(&model, 5, "21.59", "3.96", "17.63", "0.00");
+}
