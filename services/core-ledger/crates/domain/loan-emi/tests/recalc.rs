@@ -2196,3 +2196,43 @@ fn reage_after_chargeback_various_dates() {
         );
     }
 }
+
+/// `test_chargeback_transactionInMiddleOfPeriod_EQUAL_EQUAL_AMORTIZATION_PAYABLE_INTEREST`: 100 @ 7% DAYS_360/30 —
+/// repay period 0, mid-period chargeback (16.43 principal + 0.58 interest) on Mar 15, then a PAYABLE_INTEREST re-age on
+/// Mar 15 (start Apr 1). Outstanding-till-transaction-date before == outstanding-till-maturity after.
+#[test]
+fn reage_payable_after_mid_period_chargeback() {
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1);
+    let mar15 = d(2024, Month::March, 15);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    model.pay_principal(jan1, feb1, feb1, &m("16.43"));
+    model.pay_interest(jan1, feb1, feb1, &m("0.58"));
+    model.credit_principal(mar15, &m("16.43"));
+    model.credit_interest(mar15, &m("0.58"));
+
+    let (p_before, i_before) = model.get_outstanding_amounts_till_date(mar15);
+    model.re_age_equal_amortization(mar15, d(2024, Month::April, 1), 6, 1, false);
+    let (p_after, i_after) =
+        model.get_outstanding_amounts_till_date(model.periods.last().unwrap().due);
+
+    assert_eq!(
+        p_after.to_plain_string(),
+        p_before.to_plain_string(),
+        "PAYABLE re-age after chargeback preserves outstanding principal"
+    );
+    assert_eq!(
+        i_after.to_plain_string(),
+        i_before.to_plain_string(),
+        "PAYABLE re-age after chargeback preserves outstanding interest"
+    );
+}
