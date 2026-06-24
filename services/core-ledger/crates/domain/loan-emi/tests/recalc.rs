@@ -2481,3 +2481,36 @@ fn declining_mid_period_second_disbursement() {
         "0.00",
     );
 }
+
+/// `testFlatDaily_1_Month_360_30` (third disbursement block): after 1000 disbursed (EMI 260), a mid-period FLAT
+/// disbursement of 250 on Feb 6 splits period 1 and re-amortizes — period 0 stays 260, periods 1-3 become 345.69 with
+/// period 1 carrying the partial mid-period interest (12.07).
+#[test]
+fn flat_mid_period_third_disbursement() {
+    let periods = [
+        (d(2024, Month::January, 1), d(2024, Month::February, 1)),
+        (d(2024, Month::February, 1), d(2024, Month::March, 1)),
+        (d(2024, Month::March, 1), d(2024, Month::April, 1)),
+        (d(2024, Month::April, 1), d(2024, Month::May, 1)),
+    ];
+    let jan1 = d(2024, Month::January, 1);
+    let feb6 = d(2024, Month::February, 6);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    let mut model = new_empty(
+        &periods,
+        &bd("12.0"),
+        DayCount::Days360Days30 { repay_every: 1 },
+        InterestMethod::Flat,
+        2,
+        RoundingMode::HalfEven,
+    );
+    model.add_disbursement(jan1, &m("750.0"));
+    model.add_disbursement(jan1, &m("250.0"));
+    model.add_disbursement(feb6, &m("250.0"));
+
+    check_rp(&model, 0, "260.00", "10.00", "250.00", "750.00");
+    check_rp(&model, 1, "345.69", "12.07", "333.62", "666.38");
+    check_rp(&model, 2, "345.69", "12.50", "333.19", "333.19");
+    check_rp(&model, 3, "345.69", "12.50", "333.19", "0.00");
+}
