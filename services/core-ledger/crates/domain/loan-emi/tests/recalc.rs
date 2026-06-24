@@ -2055,3 +2055,62 @@ fn reage_after_payments_preserves_outstanding() {
         "outstanding interest unchanged by re-age (after payments)"
     );
 }
+
+/// `test_transactionInMiddleOfPeriod_EQUAL_EQUAL_AMORTIZATION_PAYABLE_INTEREST`: 100 @ 15.678% DAYS_365, a complex
+/// payment sequence (on-time period 0, MIR overpayments of periods 1/4/5 on Feb 1, two balance corrections via
+/// getDueAmounts), then a PAYABLE_INTEREST re-age on Apr 15. Invariant: outstanding-till-transaction-date before the
+/// re-age equals outstanding-till-maturity after it. Exercises the full op set + re-age with full_interest=false.
+#[test]
+fn reage_payable_interest_after_mir_payments() {
+    let jan1 = d(2024, Month::January, 1);
+    let feb1 = d(2024, Month::February, 1);
+    let mar1 = d(2024, Month::March, 1);
+    let apr1 = d(2024, Month::April, 1);
+    let may1 = d(2024, Month::May, 1);
+    let jun1 = d(2024, Month::June, 1);
+    let jul1 = d(2024, Month::July, 1);
+    let apr15 = d(2024, Month::April, 15);
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+
+    let mut model = new_declining_balance_with_day_count(
+        &six_monthly(),
+        &bd("100"),
+        &bd("15.678"),
+        DayCount::ActualFixedYear { days_in_year: 365 },
+        2,
+        RoundingMode::HalfEven,
+    );
+
+    model.pay_principal(jan1, feb1, feb1, &m("16.1"));
+    model.pay_interest(jan1, feb1, feb1, &m("1.33"));
+    model.pay_principal(feb1, mar1, feb1, &m("17.43"));
+    model.pay_principal(jun1, jul1, feb1, &m("17.43"));
+    model.pay_principal(may1, jun1, feb1, &m("2.57"));
+
+    let dp1 = model
+        .get_due_amounts(mar1, apr1, apr1)
+        .unwrap()
+        .due_principal;
+    model.add_balance_correction(apr1, &dp1);
+    let dp2 = model
+        .get_due_amounts(mar1, apr1, apr1)
+        .unwrap()
+        .due_principal;
+    model.add_balance_correction(apr15, &m("0").minus(&dp2));
+
+    let (p_before, i_before) = model.get_outstanding_amounts_till_date(apr15);
+    model.re_age_equal_amortization(apr15, d(2024, Month::April, 20), 6, 1, false);
+    let maturity_after = model.periods.last().unwrap().due;
+    let (p_after, i_after) = model.get_outstanding_amounts_till_date(maturity_after);
+
+    assert_eq!(
+        p_after.to_plain_string(),
+        p_before.to_plain_string(),
+        "PAYABLE_INTEREST re-age preserves outstanding principal"
+    );
+    assert_eq!(
+        i_after.to_plain_string(),
+        i_before.to_plain_string(),
+        "PAYABLE_INTEREST re-age preserves outstanding interest"
+    );
+}
