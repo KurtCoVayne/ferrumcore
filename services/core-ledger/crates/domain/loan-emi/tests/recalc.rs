@@ -5616,3 +5616,48 @@ fn multi_disbursed_150_backdated() {
         "0.00",
     );
 }
+
+/// `test_feb29_period_only_cross_year_quarterly_period_containing_feb29` (ProgressiveEMICalculatorTest.java:3183-3228):
+/// 10000 @ 12% ACTUAL, quarterly periods Sep 2023 → Sep 2024. Builds two schedules — FEB_29_PERIOD_ONLY vs
+/// FULL_LEAP_YEAR (= standard ACTUAL/ACTUAL). Period 1 (Dec 1 2023 → Mar 1 2024) CONTAINS Feb 29 → both use 366 →
+/// equal due interest. Period 2 (Mar 1 → Jun 1 2024) has NO Feb 29 → FEB_29_PERIOD_ONLY uses 365, FULL_LEAP_YEAR uses
+/// 366 → due interest differs. (Relative-property test, exactly as the Java assertions.)
+#[test]
+fn feb29_period_only_cross_year_quarterly() {
+    let periods = [
+        (d(2023, Month::September, 1), d(2023, Month::December, 1)),
+        (d(2023, Month::December, 1), d(2024, Month::March, 1)),
+        (d(2024, Month::March, 1), d(2024, Month::June, 1)),
+        (d(2024, Month::June, 1), d(2024, Month::September, 1)),
+    ];
+    let feb29 = new_declining_balance_with_day_count(
+        &periods,
+        &bd("10000"),
+        &bd("12.0"),
+        DayCount::ActualFeb29PeriodOnly,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let full_leap = new_declining_balance_with_day_count(
+        &periods,
+        &bd("10000"),
+        &bd("12.0"),
+        DayCount::ActualActual {
+            recognition_on_disbursement: false,
+        },
+        2,
+        RoundingMode::HalfEven,
+    );
+    // Period 1 contains Feb 29 → 366 for both strategies → equal interest.
+    assert_eq!(
+        feb29.period_due_interest(1).to_plain_string(),
+        full_leap.period_due_interest(1).to_plain_string(),
+        "cross-year period containing Feb 29 must match (both 366)"
+    );
+    // Period 2 has no Feb 29 → FEB_29_PERIOD_ONLY uses 365, FULL_LEAP_YEAR uses 366 → differ.
+    assert_ne!(
+        feb29.period_due_interest(2).to_plain_string(),
+        full_leap.period_due_interest(2).to_plain_string(),
+        "period without Feb 29 must differ (365 vs 366)"
+    );
+}

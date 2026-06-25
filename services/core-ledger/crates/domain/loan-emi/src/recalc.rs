@@ -51,6 +51,10 @@ pub enum DayCount {
         repay_every: i64,
         months_in_year: i64,
     },
+    /// ACTUAL/ACTUAL with the `FEB_29_PERIOD_ONLY` custom strategy: daysInYear is 366 only for a period whose `(from,
+    /// due]` contains a Feb 29 (else 365), and the Dec-31 year-boundary split applies only when a year-crossing period
+    /// also contains Feb 29 (`schedule::DayCountKind::ActualFeb29PeriodOnly`).
+    ActualFeb29PeriodOnly,
 }
 
 /// One interest period (`InterestPeriod`). All money at currency scale; rate factors full precision.
@@ -279,6 +283,7 @@ impl Model {
                 &BigDecimal::from((ip_due - ip_from).whole_days()), // actualDaysInPeriod (segment length)
                 &BigDecimal::from((rp_due - rp_from).whole_days()), // calculatedDaysInPeriod
             ),
+            DayCount::ActualFeb29PeriodOnly => self.feb29_rate_factor(rate, ip_from, ip_due),
         }
     }
 
@@ -306,6 +311,39 @@ impl Model {
                 &BigDecimal::from((due - from).whole_days()),
                 &one,
                 &BigDecimal::from(crate::schedule::year_len(from.year())),
+                &one,
+                &one,
+            )
+        }
+    }
+
+    /// ACTUAL/ACTUAL with the FEB_29_PERIOD_ONLY strategy over `[from, due)` — port of
+    /// `schedule::DayCountKind::ActualFeb29PeriodOnly`: daysInYear is forced to 365 when the year is a leap year but
+    /// the period contains no Feb 29; the Dec-31 cross-year split applies only when the year-crossing period contains a
+    /// Feb 29.
+    fn feb29_rate_factor(&self, rate: &BigDecimal, from: Date, due: Date) -> BigDecimal {
+        let one = BigDecimal::from(1);
+        let contains_feb29 = crate::schedule::period_contains_feb29(from, due);
+        let year_len = crate::schedule::year_len(from.year());
+        let days_in_year = if year_len == 366 && !contains_feb29 {
+            365
+        } else {
+            year_len
+        };
+        if due.year() > from.year() && contains_feb29 {
+            let cpf = crate::schedule::calculate_period_fractions(&self.mc, from, due, false);
+            decimal::set_scale(
+                &self.mc.mul(rate, &cpf),
+                i64::from(self.mc.precision),
+                self.mc.mode,
+            )
+        } else {
+            rate_factor_by_repayment_period(
+                &self.mc,
+                rate,
+                &BigDecimal::from((due - from).whole_days()),
+                &one,
+                &BigDecimal::from(days_in_year),
                 &one,
                 &one,
             )
@@ -354,6 +392,7 @@ impl Model {
                 &BigDecimal::from((rp_due - ip_from).whole_days()), // till the rp due date
                 &BigDecimal::from((rp_due - rp_from).whole_days()),
             ),
+            DayCount::ActualFeb29PeriodOnly => self.feb29_rate_factor(rate, ip_from, rp_due),
         }
     }
 

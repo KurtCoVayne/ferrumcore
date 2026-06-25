@@ -122,7 +122,7 @@ pub(crate) fn year_len(year: i32) -> i64 {
 
 /// `isPeriodContainsFeb29` (src line 1330): true when some leap year in `[from.year, due.year]` has its Feb 29
 /// in the half-open range `(from, due]` (`isDateInRangeFromExclusiveToInclusive`).
-fn period_contains_feb29(from: Date, due: Date) -> bool {
+pub(crate) fn period_contains_feb29(from: Date, due: Date) -> bool {
     (from.year()..=due.year()).any(|year| {
         year_len(year) == 366
             && Date::from_calendar_date(year, Month::February, 29)
