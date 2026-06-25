@@ -120,6 +120,12 @@ pub struct Model {
     /// period's from-date (no mid-period interest-period split); when true it splits at the exact date. Only consulted
     /// for [`DayCount::SameAsRepayment`]; other day counts always split at the exact date (so default `true`).
     pub allow_partial_period_interest: bool,
+    /// `graceOnInterestPayment` — the number of leading repayment periods whose interest is deferred (moved to the
+    /// first post-grace period). 0 = no interest grace.
+    pub grace_on_interest: i64,
+    /// `INTEREST_PAUSE_FOR_EMI_CALCULATION` — set true iff `grace_on_interest > 0`; when true the annuity EMI is
+    /// computed treating graced periods as zero-interest (`getRateFactorPlus1ForEmi` returns ONE for them).
+    pub interest_pause_for_emi: bool,
 }
 
 // --- Money helpers (mirroring MathUtil / Money) ---
@@ -696,6 +702,29 @@ impl Model {
             .fold(BigDecimal::from(1), |a, ip| a + &ip.rate_factor)
     }
 
+    /// `getRateFactorPlus1ForEmi` — returns ONE for a graced period when interest-pause-for-EMI is enabled (so the
+    /// annuity EMI is computed as if graced periods accrue no interest), else the normal `rate_factor_plus_1`.
+    fn rate_factor_plus_1_for_emi(&self, i: usize) -> BigDecimal {
+        if self.interest_pause_for_emi && self.periods[i].interest_payment_grace {
+            BigDecimal::from(1)
+        } else {
+            self.rate_factor_plus_1(i)
+        }
+    }
+
+    /// `applyInterestMoratoriumIfRequired` — when interest-pause-for-EMI is enabled, mark the first
+    /// `min(grace_on_interest, n)` repayment periods as interest-payment-grace (their interest defers forward).
+    fn apply_interest_moratorium(&mut self) {
+        if !self.interest_pause_for_emi {
+            return;
+        }
+        let n = self.periods.len();
+        let g = (self.grace_on_interest.max(0) as usize).min(n);
+        for rp in self.periods.iter_mut().take(g) {
+            rp.interest_payment_grace = true;
+        }
+    }
+
     /// `getInitialBalanceForEmiRecalculation` for period `i`.
     fn initial_balance_for_emi(&self, i: usize) -> Money {
         let initial = if i == 0 {
@@ -722,16 +751,16 @@ impl Model {
         if start >= n {
             return;
         }
-        // rateFactorN = stripTrailingZeros( Π (1 + rateFactor) ) over [start..]
+        // rateFactorN = stripTrailingZeros( Π (1 + rateFactor) ) over [start..] (grace periods contribute ONE)
         let rate_factor_n = (start..n)
             .fold(BigDecimal::from(1), |acc, i| {
-                self.mc.mul(&acc, &self.rate_factor_plus_1(i))
+                self.mc.mul(&acc, &self.rate_factor_plus_1_for_emi(i))
             })
             .normalized();
-        // fnResult = stripTrailingZeros( fold fnValue over [start+1..] )
+        // fnResult = stripTrailingZeros( fold fnValue over [start+1..] ) (grace periods contribute ONE)
         let fn_result = (start + 1..n)
             .fold(BigDecimal::from(1), |f, i| {
-                fn_value(&self.mc, &f, &self.rate_factor_plus_1(i))
+                fn_value(&self.mc, &f, &self.rate_factor_plus_1_for_emi(i))
             })
             .normalized();
         let outstanding = self.initial_balance_for_emi(start);
@@ -1141,6 +1170,8 @@ impl Model {
         {
             // calculateEMIValueAndRateFactorsForDecliningBalanceInterestMethod on the related periods.
             let related_start = self.related_start(self.effective_due_date(rp_idx, date));
+            // applyInterestMoratoriumIfRequired (called from both the declining & flat EMI paths) before rate factors.
+            self.apply_interest_moratorium();
             if self.interest_method == InterestMethod::Flat {
                 // calculateEMIValueAndRateFactorsForFlatInterestMethod: rate factors then the flat EMI (which updates
                 // outstanding internally); no annuity / new-model-merge / last-unpaid / cent-adjust.
@@ -2173,6 +2204,8 @@ pub fn new_declining_balance_with_day_count(
         interest_method: InterestMethod::DecliningBalance,
         emi_recalculation_enabled: true,
         allow_partial_period_interest: true,
+        grace_on_interest: 0,
+        interest_pause_for_emi: false,
     };
     if let (Some((from, _)), _) = (period_dates.first(), ()) {
         model.add_disbursement(*from, &Money::of(scale, mode, disbursed));
@@ -2240,6 +2273,8 @@ pub fn new_empty(
         interest_method,
         emi_recalculation_enabled: true,
         allow_partial_period_interest: true,
+        grace_on_interest: 0,
+        interest_pause_for_emi: false,
     }
 }
 

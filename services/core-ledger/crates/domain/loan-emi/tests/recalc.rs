@@ -5416,3 +5416,30 @@ fn same_as_repayment_flat_periods_24_second_disbursement() {
     check_rp(&model, 4, "574.22", "110.00", "464.22", "8820.22"); // 3911
     check_rp(&model, 23, "574.26", "110.00", "464.26", "0.00"); // 3930 (tail)
 }
+
+/// `test_interestGraceForProgressiveSchedule` (ProgressiveEMICalculatorTest.java:5317-5345): 100 @ 7% DAYS_360/30, six
+/// monthly periods, graceOnInterestPayment = 2 → periods 0/1 accrue no due interest (deferred forward), period 2's
+/// interest carries the deferral (1.44). EMI stays 17.01 (16.98 on the last). Exercises apply_interest_moratorium +
+/// the grace-aware annuity (rate_factor_plus_1_for_emi).
+#[test]
+fn interest_grace_for_progressive_schedule() {
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+    let mut model = new_empty(
+        &six_monthly(),
+        &bd("7.0"),
+        DayCount::Days360Days30 { repay_every: 1 },
+        InterestMethod::DecliningBalance,
+        2,
+        RoundingMode::HalfEven,
+    );
+    model.grace_on_interest = 2;
+    model.interest_pause_for_emi = true;
+    model.add_disbursement(d(2024, Month::January, 1), &m("100.0"));
+
+    check_rp(&model, 0, "17.01", "0.00", "17.01", "82.99");
+    check_rp(&model, 1, "17.01", "0.00", "17.01", "65.98");
+    check_rp(&model, 2, "17.01", "1.44", "15.57", "50.41");
+    check_rp(&model, 3, "17.01", "0.29", "16.72", "33.69");
+    check_rp(&model, 4, "17.01", "0.20", "16.81", "16.88");
+    check_rp(&model, 5, "16.98", "0.10", "16.88", "0.00");
+}
