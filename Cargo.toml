@@ -34,6 +34,7 @@ fc-domain-shared = { path = "shared/fc-domain-shared" }
 fc-domain-charge-tax-rates = { path = "shared/fc-domain-charge-tax-rates" }
 fc-proto = { path = "shared/fc-proto" }
 fc-contracts = { path = "shared/fc-contracts" }
+fc-loan-emi = { path = "services/core-ledger/crates/domain/loan-emi" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

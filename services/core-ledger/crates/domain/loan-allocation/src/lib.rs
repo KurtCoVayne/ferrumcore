@@ -31,10 +31,12 @@
 
 pub mod advanced;
 pub mod driver;
+pub mod emi_adapter;
 pub mod installment;
 pub mod model;
 pub mod strategy;
 
+pub use emi_adapter::ProgressiveEmiCalculator;
 pub use installment::Installment;
 pub use model::{Allocation, PendingCharge, Txn, TxnKind};
 pub use strategy::Strategy;
