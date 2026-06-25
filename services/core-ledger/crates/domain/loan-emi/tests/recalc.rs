@@ -5443,3 +5443,66 @@ fn interest_grace_for_progressive_schedule() {
     check_rp(&model, 4, "17.01", "0.20", "16.81", "16.88");
     check_rp(&model, 5, "16.98", "0.10", "16.88", "0.00");
 }
+
+/// `test_fullTermTranche_disbursedAmt200_2ndOnDueDate_*` (ProgressiveEMICalculatorTest.java:5348-5413): 9.4822%
+/// DAYS_360/30, numberOfRepayments=6, isAllowFullTermForTranche=true, 7 periods pre-generated (6 + 1 extension).
+/// Each tranche gets its OWN full 6-period schedule from its first period; EMIs aggregate where tranches overlap.
+/// Disburse 100 Jan 1 → EMI 17.13 on periods 0-5, period 6 = 0 (tranche 1 ends at Jul 1). Disburse 100 Feb 1 →
+/// tranche 2 runs periods 1-6, so period 0 = 17.13 (tranche 1 only), periods 1-5 = 34.26 (both), period 6 = 17.13
+/// (tranche 2 only). EMI-only assertions (Java uses 0.01 tolerance; the goldens are exact at scale 2).
+#[test]
+fn full_term_tranche_2nd_on_due_date() {
+    let periods = [
+        (d(2024, Month::January, 1), d(2024, Month::February, 1)),
+        (d(2024, Month::February, 1), d(2024, Month::March, 1)),
+        (d(2024, Month::March, 1), d(2024, Month::April, 1)),
+        (d(2024, Month::April, 1), d(2024, Month::May, 1)),
+        (d(2024, Month::May, 1), d(2024, Month::June, 1)),
+        (d(2024, Month::June, 1), d(2024, Month::July, 1)),
+        (d(2024, Month::July, 1), d(2024, Month::August, 1)),
+    ];
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+    let mut model = new_empty(
+        &periods,
+        &bd("9.4822"),
+        DayCount::Days360Days30 { repay_every: 1 },
+        InterestMethod::DecliningBalance,
+        2,
+        RoundingMode::HalfEven,
+    );
+    model.allow_full_term_for_tranche = true;
+    model.number_of_repayments = 6;
+
+    model.add_disbursement(d(2024, Month::January, 1), &m("100.0"));
+    for i in 0..=5 {
+        assert_eq!(
+            model.period_emi(i).to_plain_string(),
+            "17.13",
+            "after 1st disb, period {i}"
+        );
+    }
+    assert_eq!(
+        model.period_emi(6).to_plain_string(),
+        "0.00",
+        "after 1st disb, period 6"
+    );
+
+    model.add_disbursement(d(2024, Month::February, 1), &m("100.0"));
+    assert_eq!(
+        model.period_emi(0).to_plain_string(),
+        "17.13",
+        "period 0 (single tranche)"
+    );
+    for i in 1..=5 {
+        assert_eq!(
+            model.period_emi(i).to_plain_string(),
+            "34.26",
+            "period {i} (aggregated)"
+        );
+    }
+    assert_eq!(
+        model.period_emi(6).to_plain_string(),
+        "17.13",
+        "period 6 (single tranche)"
+    );
+}

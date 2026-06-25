@@ -126,6 +126,12 @@ pub struct Model {
     /// `INTEREST_PAUSE_FOR_EMI_CALCULATION` — set true iff `grace_on_interest > 0`; when true the annuity EMI is
     /// computed treating graced periods as zero-interest (`getRateFactorPlus1ForEmi` returns ONE for them).
     pub interest_pause_for_emi: bool,
+    /// `isAllowFullTermForTranche` — when true (and `number_of_repayments > 0`), each disbursement gets its OWN
+    /// full-term sub-schedule starting at the containing period; the sub-schedule's per-period EMI is ADDED onto the
+    /// matching existing period (`addFullTermTrancheDisbursement` / `mergeNewScheduleModelWithExistingOne`).
+    pub allow_full_term_for_tranche: bool,
+    /// `numberOfRepayments` — the loan's configured installment count (used by the full-term-tranche sub-schedule).
+    pub number_of_repayments: i64,
 }
 
 // --- Money helpers (mirroring MathUtil / Money) ---
@@ -1154,6 +1160,109 @@ impl Model {
         }
     }
 
+    /// `addFullTermTrancheDisbursement` + `mergeNewScheduleModelWithExistingOne` (lines 155-248): generate a fresh
+    /// `number_of_repayments`-period sub-schedule for this tranche starting at the period containing `date` (else
+    /// maturity), then ADD each sub-schedule period's `duePrincipal + dueInterest` onto the matching existing period's
+    /// EMI (matched by from+due dates), appending new periods past the original maturity when the tranche extends
+    /// beyond it.
+    fn add_full_term_tranche_disbursement(&mut self, date: Date, amount: &Money) {
+        let repay_every = match self.day_count {
+            DayCount::Days360Days30 { repay_every }
+            | DayCount::SameAsRepayment { repay_every, .. } => repay_every,
+            _ => 1,
+        };
+        // firstDisbursedPeriodStartDate: the from-date of the period containing `date` ([from, due)), else maturity.
+        let start_date = self
+            .periods
+            .iter()
+            .find(|rp| rp.from <= date && date < rp.due)
+            .map(|rp| rp.from)
+            .unwrap_or_else(|| self.periods.last().map_or(date, |p| p.due));
+
+        // Temporary full-term sub-schedule for this tranche (its own `number_of_repayments` periods + fresh EMI).
+        let n = self.number_of_repayments.max(0) as usize;
+        let temp_periods: Vec<(Date, Date)> = (0..n)
+            .map(|k| {
+                (
+                    add_months(start_date, k as i64 * repay_every),
+                    add_months(start_date, (k as i64 + 1) * repay_every),
+                )
+            })
+            .collect();
+        let rate_pct = &self.rate * BigDecimal::from(100);
+        let temp = new_declining_balance_with_day_count(
+            &temp_periods,
+            amount.amount(),
+            &rate_pct,
+            self.day_count,
+            self.scale,
+            self.mode,
+        );
+
+        // Apply the disbursement to the existing model's outstanding balance.
+        self.change_outstanding_and_split(date, amount, &self.zero(), &self.zero());
+
+        for k in 0..temp.periods.len() {
+            let add_emi = temp.due_principal(k).plus(&temp.due_interest(k));
+            let tf = temp.periods[k].from;
+            let td = temp.periods[k].due;
+            if let Some(idx) = self
+                .periods
+                .iter()
+                .position(|ep| ep.from == tf && ep.due == td)
+            {
+                let new_emi = self.periods[idx].emi.plus(&add_emi);
+                self.periods[idx].emi = new_emi.clone();
+                self.periods[idx].original_emi = new_emi;
+            } else {
+                // Append a period beyond the original maturity (faithful port of lines 232-242): chain to the last
+                // existing period, EMI = the tranche period's principal+interest, inherit the last total-disbursed.
+                let zero = self.zero();
+                let last = self.periods.last();
+                let prev_due = last.map(|p| p.due);
+                let total_disbursed = last
+                    .map(|p| p.total_disbursed_amount.clone())
+                    .unwrap_or_else(|| zero.clone());
+                let from = if k == 0 { prev_due.unwrap_or(tf) } else { tf };
+                self.periods.push(RepaymentPeriod {
+                    from,
+                    due: td,
+                    interest_periods: vec![InterestPeriod {
+                        from,
+                        due: td,
+                        rate_factor: BigDecimal::from(0),
+                        rate_factor_till_period_due_date: BigDecimal::from(0),
+                        credited_principal: zero.clone(),
+                        credited_interest: zero.clone(),
+                        disbursement_amount: zero.clone(),
+                        balance_correction_amount: zero.clone(),
+                        capitalized_income_principal: zero.clone(),
+                        outstanding_loan_balance: zero.clone(),
+                        is_paused: false,
+                    }],
+                    emi: add_emi.clone(),
+                    original_emi: add_emi.clone(),
+                    paid_principal: zero.clone(),
+                    paid_interest: zero.clone(),
+                    future_unrecognized_interest: zero.clone(),
+                    total_disbursed_amount: total_disbursed,
+                    total_capitalized_income_amount: zero.clone(),
+                    interest_payment_grace: false,
+                    is_interest_moved_upward: false,
+                    is_interest_moved_downward: false,
+                    re_aged: false,
+                    re_aged_early_repayment_holder: false,
+                    credited_principal_moved_due_reage: zero.clone(),
+                    credited_interest_moved_due_reage: zero.clone(),
+                    fixed_interest: zero,
+                });
+            }
+        }
+        self.calculate_rate_factor_for_periods();
+        self.calculate_outstanding_balance();
+        self.calculate_last_unpaid_emi();
+    }
+
     pub fn add_disbursement(&mut self, date: Date, amount: &Money) {
         // `addDisbursement` lines 128-133: under SAME_AS_REPAYMENT with !allowPartial, snap the disbursement to the
         // containing period's from-date so no mid-period interest-period split occurs (the new principal accrues for
@@ -1163,6 +1272,12 @@ impl Model {
             if date <= rp.from {
                 rp.total_disbursed_amount = rp.total_disbursed_amount.plus(amount);
             }
+        }
+        // `addDisbursement` lines 142-144: full-term-tranche disbursements build a per-tranche full-term sub-schedule
+        // and merge its EMIs onto the existing periods (instead of the single-schedule recompute below).
+        if self.allow_full_term_for_tranche && self.number_of_repayments > 0 {
+            self.add_full_term_tranche_disbursement(date, amount);
+            return;
         }
         let was_empty = self.is_empty();
         if let Some(rp_idx) =
@@ -2206,6 +2321,8 @@ pub fn new_declining_balance_with_day_count(
         allow_partial_period_interest: true,
         grace_on_interest: 0,
         interest_pause_for_emi: false,
+        allow_full_term_for_tranche: false,
+        number_of_repayments: 0,
     };
     if let (Some((from, _)), _) = (period_dates.first(), ()) {
         model.add_disbursement(*from, &Money::of(scale, mode, disbursed));
@@ -2275,6 +2392,8 @@ pub fn new_empty(
         allow_partial_period_interest: true,
         grace_on_interest: 0,
         interest_pause_for_emi: false,
+        allow_full_term_for_tranche: false,
+        number_of_repayments: 0,
     }
 }
 
