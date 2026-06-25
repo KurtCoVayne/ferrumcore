@@ -662,3 +662,115 @@ pub fn handle_payment_allocation_interest_bearing(
     }
     paid
 }
+
+/// `LoanPaymentAllocationRule.getFutureInstallmentAllocationRule()` — how an IN_ADVANCE amount spreads over future
+/// installments. Consumed only by the IN_ADVANCE branch (the next bit — see `process_allocations_horizontally`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FutureInstallmentAllocationRule {
+    NextInstallment,
+    LastInstallment,
+    Reamortization,
+    NextLastInstallment,
+}
+
+/// `LoanRepaymentScheduleInstallment.isNotFullyPaidOff()` — any component still outstanding.
+fn installment_not_fully_paid(inst: &AdvancedInstallment) -> bool {
+    let i = inst.installment();
+    i.principal_outstanding()
+        .plus(&i.interest_outstanding())
+        .plus(&i.fee_charges_outstanding())
+        .plus(&i.penalty_charges_outstanding())
+        .is_greater_than_zero()
+}
+
+/// `processPeriodsHorizontally` (src line 2681) for the **non-interest-bearing** path: group the rule's allocation
+/// types by [`DueType`] in first-seen order (mirroring the Java `LinkedHashMap`), then run each group through the
+/// do-while allocation loop. Returns the unprocessed amount (the overpayment). The interest-bearing path delegates
+/// each leaf to the EMI seam via [`handle_payment_allocation_interest_bearing`].
+#[must_use]
+pub fn process_periods_horizontally(
+    installments: &mut [AdvancedInstallment],
+    allocations: &[PaymentAllocation],
+    future_rule: FutureInstallmentAllocationRule,
+    txn_date: Date,
+    amount: &Money,
+) -> Money {
+    let mut groups: Vec<(DueType, Vec<AllocationType>)> = Vec::new();
+    for a in allocations {
+        match groups.iter_mut().find(|(dt, _)| *dt == a.due_type) {
+            Some(g) => g.1.push(a.allocation_type),
+            None => groups.push((a.due_type, vec![a.allocation_type])),
+        }
+    }
+    let mut unprocessed = amount.clone();
+    for (due_type, types) in &groups {
+        unprocessed = process_allocations_horizontally(
+            installments,
+            *due_type,
+            types,
+            future_rule,
+            txn_date,
+            &unprocessed,
+        );
+    }
+    unprocessed
+}
+
+/// `processAllocationsHorizontally` (src line 2696) — the `LoopGuard` do-while (cap = installments×100) that, each
+/// iteration, selects the target installment for the group's `DueType` and applies each allocation type's component
+/// payment, subtracting from the unprocessed amount until exhausted or every installment is fully paid.
+///
+/// **Scope:** PAST_DUE and DUE are ported and verified (the DUE path against the captured Java golden, PAST_DUE being
+/// the same code with the past-due selector). IN_ADVANCE (the even-split across future installments per
+/// `future_rule`, src 2826-2860) is the next bit — it sets the exit condition here pending its own captured golden.
+fn process_allocations_horizontally(
+    installments: &mut [AdvancedInstallment],
+    due_type: DueType,
+    types: &[AllocationType],
+    _future_rule: FutureInstallmentAllocationRule,
+    txn_date: Date,
+    amount: &Money,
+) -> Money {
+    let mut unprocessed = amount.clone();
+    if unprocessed.is_zero() {
+        return unprocessed;
+    }
+    let cap = installments.len().saturating_mul(100);
+    let mut exit = false;
+    for _ in 0..cap {
+        if exit
+            || !unprocessed.is_greater_than_zero()
+            || !installments.iter().any(installment_not_fully_paid)
+        {
+            break;
+        }
+        // The oldest past-due / the on-due installment = the earliest in the ordered list among not-fully-paid.
+        let oldest_past_due = installments
+            .iter()
+            .position(|e| installment_not_fully_paid(e) && txn_date > e.due_date());
+        let due = installments
+            .iter()
+            .position(|e| installment_not_fully_paid(e) && txn_date == e.due_date());
+        for &at in types {
+            let target = match due_type {
+                DueType::PastDue => oldest_past_due,
+                DueType::Due => due,
+                DueType::InAdvance => None,
+            };
+            match (due_type, target) {
+                (DueType::InAdvance, _) => {
+                    // IN_ADVANCE even-split (src 2826-2860) — next bit; stop allocating this group for now.
+                    exit = true;
+                }
+                (_, Some(idx)) => {
+                    let allocated = pay_component(&mut installments[idx], at, &unprocessed);
+                    unprocessed = unprocessed.minus(&allocated);
+                }
+                (_, None) => {
+                    exit = true;
+                }
+            }
+        }
+    }
+    unprocessed
+}

@@ -14,10 +14,11 @@ use bigdecimal::{BigDecimal, RoundingMode};
 use fc_loan_allocation::Installment;
 use fc_loan_allocation::advanced::{
     AdvancedInstallment, AllocationType, ChangedTransactionDetail, DueType, EmiCalculator,
-    LoanTxnView, OriginalAllocation, PaymentAllocation, RelationType, ScheduleModel, TxnChange,
-    TxnRelation, calculate_chargeback_allocation_map, find_chargeback_original_transaction,
-    handle_charge_payment, handle_disbursement_with_emi,
+    FutureInstallmentAllocationRule, LoanTxnView, OriginalAllocation, PaymentAllocation,
+    RelationType, ScheduleModel, TxnChange, TxnRelation, calculate_chargeback_allocation_map,
+    find_chargeback_original_transaction, handle_charge_payment, handle_disbursement_with_emi,
     handle_payment_allocation_interest_bearing, process_credit_transaction,
+    process_periods_horizontally,
 };
 use fc_money::Money;
 use time::{Date, Month};
@@ -759,4 +760,48 @@ fn find_original_replayed_fallback_to_persisted() {
     let found =
         find_chargeback_original_transaction(&chargeback_replayed, &loan_txns, Some(&changed));
     assert_eq!(found, Ok(3));
+}
+
+/// `processPeriodsHorizontally` non-interest-bearing DUE path — verified against the Java-app capture
+/// (`fcCaptureNonInterestBearingHorizontalWalk`): one due installment (principal 100 + interest 10), a 150 payment
+/// allocated `[DUE_PRINCIPAL, DUE_INTEREST]` → DUE_PRINCIPAL pays 100, DUE_INTEREST pays 10, the remaining 40 is the
+/// overpayment (no future installment / no IN_ADVANCE type).
+#[test]
+fn horizontal_walk_due_then_overpayment() {
+    let from = date(2023, Month::January, 1);
+    let due = date(2023, Month::February, 1);
+    let inst = Installment::new(
+        SCALE,
+        MODE,
+        due,
+        BigDecimal::from(100),
+        BigDecimal::from(10),
+        BigDecimal::from(0),
+        BigDecimal::from(0),
+    );
+    let mut installments = [AdvancedInstallment::new(inst, false).with_from_date(from)];
+    let allocations = [
+        PaymentAllocation {
+            allocation_type: AllocationType::Principal,
+            due_type: DueType::Due,
+        },
+        PaymentAllocation {
+            allocation_type: AllocationType::Interest,
+            due_type: DueType::Due,
+        },
+    ];
+
+    let overpayment = process_periods_horizontally(
+        &mut installments,
+        &allocations,
+        FutureInstallmentAllocationRule::NextInstallment,
+        due, // transaction on the due date
+        &money("150"),
+    );
+
+    let paid = installments[0].installment();
+    assert_eq!(paid.principal_outstanding().to_plain_string(), "0.00");
+    assert_eq!(paid.interest_outstanding().to_plain_string(), "0.00");
+    assert_eq!(paid.principal_completed().to_plain_string(), "100.00");
+    assert_eq!(overpayment.to_plain_string(), "40.00");
 }
