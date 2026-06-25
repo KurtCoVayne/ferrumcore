@@ -5506,3 +5506,113 @@ fn full_term_tranche_2nd_on_due_date() {
         "period 6 (single tranche)"
     );
 }
+
+/// `test_multiDisbursedAmt150InSamePeriod_..._backdated_disbursement` (ProgressiveEMICalculatorTest.java:948-993):
+/// 9.4822% DAYS_360/30 declining, 6 monthly periods from 2024-01-01, but the FIRST disbursement is backdated to Jan 5
+/// (mid period 0), then 50 + 25 on Jan 8. Period 0 splits into Jan1-Jan5 (zero balance, no interest), Jan5-Jan8, and
+/// Jan8-Feb1. Total due interest 4.64, EMI 29.94.
+#[test]
+fn multi_disbursed_150_backdated() {
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+    let mut model = new_empty(
+        &six_monthly(),
+        &bd("9.4822"),
+        DayCount::Days360Days30 { repay_every: 1 },
+        InterestMethod::DecliningBalance,
+        2,
+        RoundingMode::HalfEven,
+    );
+    model.add_disbursement(d(2024, Month::January, 5), &m("100.0"));
+    model.add_disbursement(d(2024, Month::January, 8), &m("50.0"));
+    model.add_disbursement(d(2024, Month::January, 8), &m("25.0"));
+
+    assert_eq!(model.total_due_interest_amount().to_plain_string(), "4.64");
+    check_ip(
+        &model,
+        0,
+        0,
+        "29.94",
+        "0.001019591398",
+        "0.00",
+        "1.15",
+        "28.79",
+        "146.21",
+    );
+    check_ip(
+        &model,
+        0,
+        1,
+        "29.94",
+        "0.000764693548",
+        "0.0764693548332",
+        "1.15",
+        "28.79",
+        "146.21",
+    );
+    check_ip(
+        &model,
+        0,
+        2,
+        "29.94",
+        "0.006117548387",
+        "1.07057096772",
+        "1.15",
+        "28.79",
+        "146.21",
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "29.94",
+        "0.007901833333",
+        "1.15532705162",
+        "1.16",
+        "28.78",
+        "117.43",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "29.94",
+        "0.007901833333",
+        "0.927912288294",
+        "0.93",
+        "29.01",
+        "88.42",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "29.94",
+        "0.007901833333",
+        "0.698680103304",
+        "0.70",
+        "29.24",
+        "59.18",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "29.94",
+        "0.007901833333",
+        "0.467630496646",
+        "0.47",
+        "29.47",
+        "29.71",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "29.94",
+        "0.007901833333",
+        "0.234763468323",
+        "0.23",
+        "29.71",
+        "0.00",
+    );
+}
