@@ -17,10 +17,10 @@ use fc_loan_allocation::advanced::{
     DueType, EmiCalculator, FutureInstallmentAllocationRule, LoanTxnView, OriginalAllocation,
     PaymentAllocation, RelationType, ScheduleModel, ScheduleProcessingType, TransactionRoute,
     TxnChange, TxnRelation, calculate_chargeback_allocation_map,
-    find_chargeback_original_transaction, handle_charge_payment, handle_disbursement_with_emi,
-    handle_payment_allocation_interest_bearing, handle_re_amortization, handle_refund,
-    handle_write_off, process_credit_transaction, process_periods_horizontally,
-    process_periods_vertically, process_repayment, route_transaction,
+    find_chargeback_original_transaction, handle_charge_off, handle_charge_payment,
+    handle_disbursement_with_emi, handle_payment_allocation_interest_bearing,
+    handle_re_amortization, handle_refund, handle_write_off, process_credit_transaction,
+    process_periods_horizontally, process_periods_vertically, process_repayment, route_transaction,
 };
 use fc_money::Money;
 use time::{Date, Month};
@@ -1358,4 +1358,75 @@ fn refund_matches_capture() {
         .collect();
     assert_eq!(done, ["0.00", "0.00", "0.00"]);
     assert_eq!(unprocessed.to_plain_string(), "0.01");
+}
+
+/// `handleChargeOff` (src 2082, REGULAR / non-interest-bearing) — verified against the Java-app capture
+/// (`fcCaptureChargeOff`): 100/10/5/3 (30 principal paid) + 50/4/0/0 → components sweep the outstanding
+/// (P 120, I 14, F 5, Pen 3) WITHOUT touching the installments; the fully-paid variant reverses and lifts.
+#[test]
+fn charge_off_matches_capture() {
+    // C1: outstanding remains.
+    let mut inst1 = AdvancedInstallment::new(
+        Installment::new(
+            SCALE,
+            MODE,
+            date(2023, Month::February, 1),
+            BigDecimal::from(100),
+            BigDecimal::from(10),
+            BigDecimal::from(5),
+            BigDecimal::from(3),
+        ),
+        false,
+    )
+    .with_from_date(date(2023, Month::January, 1));
+    let _ = inst1.installment_mut().pay_principal(&money("30"));
+    let inst2 = AdvancedInstallment::new(
+        Installment::new(
+            SCALE,
+            MODE,
+            date(2023, Month::March, 1),
+            BigDecimal::from(50),
+            BigDecimal::from(4),
+            BigDecimal::from(0),
+            BigDecimal::from(0),
+        ),
+        false,
+    )
+    .with_from_date(date(2023, Month::February, 1));
+    let installments = [inst1, inst2];
+
+    let out = handle_charge_off(&installments);
+    assert_eq!(out.components.principal.to_plain_string(), "120.00");
+    assert_eq!(out.components.interest.to_plain_string(), "14.00");
+    assert_eq!(out.components.fee.to_plain_string(), "5.00");
+    assert_eq!(out.components.penalty.to_plain_string(), "3.00");
+    assert!(!out.reversed);
+    assert!(out.charged_off);
+    // Charge-off does NOT mutate the installments (unlike write-off).
+    assert_eq!(
+        installments[0]
+            .installment()
+            .principal_outstanding()
+            .to_plain_string(),
+        "70.00"
+    );
+
+    // C2: everything paid → all components zero → reverse + lift.
+    let mut paid = installments;
+    {
+        let i = paid[0].installment_mut();
+        let _ = i.pay_principal(&money("70"));
+        let _ = i.pay_interest(&money("10"));
+        let _ = i.pay_fee(&money("5"));
+        let _ = i.pay_penalty(&money("3"));
+    }
+    {
+        let i = paid[1].installment_mut();
+        let _ = i.pay_principal(&money("50"));
+        let _ = i.pay_interest(&money("4"));
+    }
+    let out = handle_charge_off(&paid);
+    assert_eq!(out.components.principal.to_plain_string(), "0.00");
+    assert!(out.reversed);
+    assert!(!out.charged_off);
 }

@@ -1259,6 +1259,57 @@ pub fn handle_refund(
     unprocessed
 }
 
+/// The outcome of [`handle_charge_off`]: the transaction's component tuple (the outstanding sums) plus the resulting
+/// charged-off state.
+#[derive(Clone, Debug)]
+pub struct ChargeOff {
+    /// `updateComponentsAndTotal(principal, interest, fee, penalty)` — each component's total outstanding.
+    pub components: CreditComponents,
+    /// All components were zero → `loanTransaction.reverse()` + `loan.liftChargeOff()` fired (src 2126-2133).
+    pub reversed: bool,
+    /// The ctx `chargedOff` flag after the handler: set true, then cleared again when the reversal fired.
+    pub charged_off: bool,
+}
+
+/// `handleChargeOff` (src 2082) for the REGULAR charge-off behaviour on a non-interest-bearing loan: stamp the
+/// transaction with every installment's outstanding principal / interest / fee / penalty — **without** mutating the
+/// installments (unlike [`handle_write_off`]) — and mark the context charged-off. When every component is zero the
+/// transaction reverses, the charge-off is lifted, and the flag clears. (The ZERO_INTEREST / ACCELERATE_MATURITY
+/// behaviours and the accrual-transaction creation are progressive-model machinery, out of scope at this seam.)
+#[must_use]
+pub fn handle_charge_off(installments: &[AdvancedInstallment]) -> ChargeOff {
+    let zero = installments.first().map_or_else(
+        || Money::zero(2, RoundingMode::HalfEven),
+        |i| i.installment().zero(),
+    );
+    let mut principal = zero.clone();
+    let mut interest = zero.clone();
+    let mut fee = zero.clone();
+    let mut penalty = zero;
+    // Java gates the sweep on `anyMatch(isNotObligationsMet)`; when nothing is outstanding the sums stay zero either
+    // way, so the observable components are identical.
+    if installments.iter().any(installment_not_fully_paid) {
+        for inst in installments {
+            let i = inst.installment();
+            principal = principal.plus(&i.principal_outstanding());
+            interest = interest.plus(&i.interest_outstanding());
+            fee = fee.plus(&i.fee_charges_outstanding());
+            penalty = penalty.plus(&i.penalty_charges_outstanding());
+        }
+    }
+    let all_zero = principal.is_zero() && interest.is_zero() && fee.is_zero() && penalty.is_zero();
+    ChargeOff {
+        components: CreditComponents {
+            principal,
+            interest,
+            fee,
+            penalty,
+        },
+        reversed: all_zero,
+        charged_off: !all_zero,
+    }
+}
+
 /// The outcome of [`handle_re_amortization`]: the transaction's principal component (the overall overdue principal
 /// moved forward) and whether the transaction was reversed (`overdue == 0`, src 829-832).
 #[derive(Clone, Debug)]
@@ -1406,9 +1457,12 @@ pub enum TransactionRoute {
 }
 
 /// Route a transaction type to its handler — the faithful transcription of the `processLatestTransaction` switch
-/// (src 564-582). The handler bodies for `Repayment` / `Chargeback` / `ChargePayment` / `Disbursement` / `WriteOff`
-/// are ported (see [`handle_write_off`]); the rest are pending (their arms select the route so the dispatch is
-/// complete).
+/// (src 564-582). Ported handler bodies: `Repayment` (the walk), `Chargeback` ([`process_credit_transaction`]),
+/// `ChargePayment`, `Disbursement`, `WriteOff` ([`handle_write_off`]), `Refund` ([`handle_refund`]), `ChargeOff`
+/// ([`handle_charge_off`]), `ReAmortize` ([`handle_re_amortization`]), and `CreditBalanceRefund` on the
+/// non-interest-recalculation path (Java's super delegates straight to `processCreditTransaction`, src 799-802 —
+/// the same ported function as Chargeback). Pending (progressive EMI-model machinery): `InterestRefund`, `ReAge`,
+/// `CapitalizedIncome`, `ContractTermination`, and the interest-recalculation branches of the above.
 #[must_use]
 pub fn route_transaction(transaction_type: AdvancedTransactionType) -> TransactionRoute {
     use AdvancedTransactionType as T;
