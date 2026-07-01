@@ -122,6 +122,10 @@ pub struct AdvancedInstallment {
     from_date: Date,
     /// `isAdditional()` — an N+1 chargeback installment vs. a normal schedule row.
     pub is_additional: bool,
+    /// `isDownPayment()` — the down-payment row; excluded from re-amortization redistribution.
+    pub is_down_payment: bool,
+    /// `isReAged()` — a re-aged row; excluded from re-amortization redistribution.
+    pub is_re_aged: bool,
     credited_principal: Money,
     credited_interest: Money,
     credited_fee: Money,
@@ -146,6 +150,8 @@ impl AdvancedInstallment {
             credited_penalty: z.clone(),
             added_principal: z,
             is_additional,
+            is_down_payment: false,
+            is_re_aged: false,
             inner,
         }
     }
@@ -1019,6 +1025,101 @@ pub fn handle_write_off(installments: &mut [AdvancedInstallment]) -> CreditCompo
         interest,
         fee,
         penalty,
+    }
+}
+
+/// The outcome of [`handle_re_amortization`]: the transaction's principal component (the overall overdue principal
+/// moved forward) and whether the transaction was reversed (`overdue == 0`, src 829-832).
+#[derive(Clone, Debug)]
+pub struct ReAmortization {
+    /// `updateComponentsAndTotal(overdue, 0, 0, 0)` — the principal moved.
+    pub principal: Money,
+    /// `loanTransaction.reverse()` fired because there was nothing overdue.
+    pub reversed: bool,
+}
+
+/// `Money.roundToMultiplesOf(existingVal, inMultiplesOf)` (Money.java 150): `(v / m rounded to an integer with the
+/// platform rounding mode) × m`, as a raw decimal — the caller re-wraps at its currency scale.
+fn round_to_multiples_of(v: &BigDecimal, multiples: i64) -> BigDecimal {
+    let m = BigDecimal::from(multiples);
+    let quotient = fc_money::decimal::div(v, &m, 0, RoundingMode::HalfEven);
+    fc_money::decimal::mul(&quotient, &m)
+}
+
+/// `handleReAmortization` → `reamortizationOnNonInterestBearingLoan` (src 699 / 805) for the non-interest-bearing
+/// path: zero out every *previous* installment's remaining principal (due on or before the transaction date) into an
+/// overall overdue amount, then redistribute it evenly across the *future* installments (excluding additional /
+/// down-payment / re-aged rows) — each future installment gains `overdue / n` (rounded to
+/// `installment_amount_in_multiples_of` when configured), with the **latest-due** installment receiving the running
+/// remainder. When nothing is overdue the transaction is reversed instead.
+///
+/// Divergence note: with a positive overdue and **no** eligible future installment the Java code throws
+/// (`futureInstallments.stream().max(..).get()` on an empty stream); here the redistribution is skipped and the
+/// overdue is only reported on the returned transaction components.
+#[must_use]
+pub fn handle_re_amortization(
+    installments: &mut [AdvancedInstallment],
+    txn_date: Date,
+    installment_amount_in_multiples_of: Option<i64>,
+) -> ReAmortization {
+    let zero = installments.first().map_or_else(
+        || Money::zero(2, RoundingMode::HalfEven),
+        |i| i.installment().zero(),
+    );
+
+    // Previous installments: zero the unpaid principal into the overall overdue amount.
+    let mut overdue = zero.clone();
+    for inst in installments.iter_mut() {
+        if inst.due_date() <= txn_date {
+            let i = inst.installment_mut();
+            let completed = i.principal_completed();
+            overdue = overdue.plus(&i.principal().minus(&completed));
+            i.update_principal(&completed);
+        }
+    }
+
+    if overdue.is_zero() {
+        return ReAmortization {
+            principal: overdue,
+            reversed: true,
+        };
+    }
+
+    // Future installments (schedule rows only), the latest-due one absorbing the remainder.
+    let future: Vec<usize> = (0..installments.len())
+        .filter(|&i| {
+            let inst = &installments[i];
+            inst.due_date() > txn_date
+                && !inst.is_additional
+                && !inst.is_down_payment
+                && !inst.is_re_aged
+        })
+        .collect();
+    let last = future
+        .iter()
+        .copied()
+        .max_by_key(|&i| installments[i].due_date());
+    if let Some(last) = last {
+        let n = BigDecimal::from(future.len() as i64);
+        let mut per = overdue.divided_by(&n);
+        let mut remaining = overdue.clone();
+        for idx in future {
+            if idx == last {
+                installments[idx]
+                    .installment_mut()
+                    .add_to_principal(&remaining);
+            } else {
+                if let Some(m) = installment_amount_in_multiples_of {
+                    per = installments[idx].money(&round_to_multiples_of(per.amount(), m));
+                }
+                installments[idx].installment_mut().add_to_principal(&per);
+                remaining = remaining.minus(&per);
+            }
+        }
+    }
+    ReAmortization {
+        principal: overdue,
+        reversed: false,
     }
 }
 

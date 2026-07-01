@@ -127,6 +127,24 @@ impl Installment {
         self.money(&self.principal_completed)
     }
 
+    /// The charged principal (Java `getPrincipal`).
+    #[must_use]
+    pub fn principal(&self) -> Money {
+        self.money(&self.principal)
+    }
+
+    /// Replace the charged principal (Java `updatePrincipal` / `setPrincipal`) — re-amortization zeroes a past
+    /// installment's remaining principal by setting the charge to what was already completed.
+    pub fn update_principal(&mut self, principal: &Money) {
+        self.principal = principal.amount().clone();
+    }
+
+    /// Add to the charged principal (Java `addToPrincipal(date, amount)`, the schedule-mutation flavor used by
+    /// re-amortization — distinct from the chargeback credited-amount side-tracking).
+    pub fn add_to_principal(&mut self, amount: &Money) {
+        self.principal = self.money(&self.principal).plus(amount).amount().clone();
+    }
+
     // ----- PAY (into the paid bucket) -------------------------------------------------------------------------------
 
     fn consume(amount: &Money, due: &Money) -> Money {

@@ -18,8 +18,9 @@ use fc_loan_allocation::advanced::{
     PaymentAllocation, RelationType, ScheduleModel, ScheduleProcessingType, TransactionRoute,
     TxnChange, TxnRelation, calculate_chargeback_allocation_map,
     find_chargeback_original_transaction, handle_charge_payment, handle_disbursement_with_emi,
-    handle_payment_allocation_interest_bearing, handle_write_off, process_credit_transaction,
-    process_periods_horizontally, process_periods_vertically, process_repayment, route_transaction,
+    handle_payment_allocation_interest_bearing, handle_re_amortization, handle_write_off,
+    process_credit_transaction, process_periods_horizontally, process_periods_vertically,
+    process_repayment, route_transaction,
 };
 use fc_money::Money;
 use time::{Date, Month};
@@ -1173,4 +1174,69 @@ fn write_off_matches_capture() {
         assert_eq!(i.fee_charges_outstanding().to_plain_string(), "0.00");
         assert_eq!(i.penalty_charges_outstanding().to_plain_string(), "0.00");
     }
+}
+
+/// `handleReAmortization` → `reamortizationOnNonInterestBearingLoan` (src 699/805) — verified against the Java-app
+/// capture (`fcCaptureReAmortization`): five 100-principal installments due Feb–Jun, transaction on Mar 1 (so #1 and
+/// #2 are "previous" — due on or before). Covers the overdue sweep (previous principal set to completed), the even
+/// redistribution with the latest-due row absorbing the remainder, the `installmentAmountInMultiplesOf` rounding, and
+/// the zero-overdue reversal.
+#[test]
+fn re_amortization_matches_capture() {
+    let txn_date = date(2023, Month::March, 1);
+    let build = || -> Vec<AdvancedInstallment> {
+        (0..5)
+            .map(|i| {
+                let months = [
+                    (Month::January, Month::February),
+                    (Month::February, Month::March),
+                    (Month::March, Month::April),
+                    (Month::April, Month::May),
+                    (Month::May, Month::June),
+                ];
+                let (fm, dm) = months[i];
+                pi_installment(date(2023, fm, 1), date(2023, dm, 1), "100", "0")
+            })
+            .collect()
+    };
+
+    // R1: 40 paid on #1, nothing on #2 → overdue 160 spread over #3/#4/#5 as 53.33/53.33/53.34.
+    let mut r1 = build();
+    let _ = r1[0].installment_mut().pay_principal(&money("40"));
+    let out = handle_re_amortization(&mut r1, txn_date, None);
+    assert!(!out.reversed);
+    assert_eq!(out.principal.to_plain_string(), "160.00");
+    let principals: Vec<String> = r1
+        .iter()
+        .map(|i| i.installment().principal().to_plain_string())
+        .collect();
+    assert_eq!(principals, ["40.00", "0.00", "153.33", "153.33", "153.34"]);
+
+    // R2: everything previous fully paid → overdue 0 → the transaction reverses, schedule untouched.
+    let mut r2 = build();
+    let _ = r2[0].installment_mut().pay_principal(&money("100"));
+    let _ = r2[1].installment_mut().pay_principal(&money("100"));
+    let out = handle_re_amortization(&mut r2, txn_date, None);
+    assert!(out.reversed);
+    assert_eq!(out.principal.to_plain_string(), "0.00");
+    let principals: Vec<String> = r2
+        .iter()
+        .map(|i| i.installment().principal().to_plain_string())
+        .collect();
+    assert_eq!(
+        principals,
+        ["100.00", "100.00", "100.00", "100.00", "100.00"]
+    );
+
+    // R3: as R1 with installmentAmountInMultiplesOf = 10 → per 53.33 rounds to 50, latest-due absorbs 60.
+    let mut r3 = build();
+    let _ = r3[0].installment_mut().pay_principal(&money("40"));
+    let out = handle_re_amortization(&mut r3, txn_date, Some(10));
+    assert!(!out.reversed);
+    assert_eq!(out.principal.to_plain_string(), "160.00");
+    let principals: Vec<String> = r3
+        .iter()
+        .map(|i| i.installment().principal().to_plain_string())
+        .collect();
+    assert_eq!(principals, ["40.00", "0.00", "150.00", "150.00", "160.00"]);
 }
