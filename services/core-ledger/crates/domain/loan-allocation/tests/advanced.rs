@@ -18,7 +18,7 @@ use fc_loan_allocation::advanced::{
     PaymentAllocation, RelationType, ScheduleModel, ScheduleProcessingType, TransactionRoute,
     TxnChange, TxnRelation, calculate_chargeback_allocation_map,
     find_chargeback_original_transaction, handle_charge_payment, handle_disbursement_with_emi,
-    handle_payment_allocation_interest_bearing, process_credit_transaction,
+    handle_payment_allocation_interest_bearing, handle_write_off, process_credit_transaction,
     process_periods_horizontally, process_periods_vertically, process_repayment, route_transaction,
 };
 use fc_money::Money;
@@ -1124,5 +1124,53 @@ fn route_transaction_matches_java_switch() {
     ];
     for (t, expected) in cases {
         assert_eq!(route_transaction(t), expected, "route for {t:?}");
+    }
+}
+
+/// `handleWriteOff` (src 1927 → super 764) — verified against the Java-app capture (`fcCaptureWriteOff`): two
+/// not-fully-paid installments (100/10/5/3 and 50/4/0/0) written off → aggregate P 150, I 14, F 5, Pen 3, and every
+/// installment's outstanding driven to zero.
+#[test]
+fn write_off_matches_capture() {
+    let inst1 = AdvancedInstallment::new(
+        Installment::new(
+            SCALE,
+            MODE,
+            date(2023, Month::February, 1),
+            BigDecimal::from(100),
+            BigDecimal::from(10),
+            BigDecimal::from(5),
+            BigDecimal::from(3),
+        ),
+        false,
+    )
+    .with_from_date(date(2023, Month::January, 1));
+    let inst2 = AdvancedInstallment::new(
+        Installment::new(
+            SCALE,
+            MODE,
+            date(2023, Month::March, 1),
+            BigDecimal::from(50),
+            BigDecimal::from(4),
+            BigDecimal::from(0),
+            BigDecimal::from(0),
+        ),
+        false,
+    )
+    .with_from_date(date(2023, Month::February, 1));
+    let mut installments = [inst1, inst2];
+
+    let wo = handle_write_off(&mut installments);
+
+    assert_eq!(wo.principal.to_plain_string(), "150.00");
+    assert_eq!(wo.interest.to_plain_string(), "14.00");
+    assert_eq!(wo.fee.to_plain_string(), "5.00");
+    assert_eq!(wo.penalty.to_plain_string(), "3.00");
+    for inst in &installments {
+        let i = inst.installment();
+        assert_eq!(i.principal_outstanding().to_plain_string(), "0.00");
+        assert_eq!(i.interest_outstanding().to_plain_string(), "0.00");
+        assert_eq!(i.fee_charges_outstanding().to_plain_string(), "0.00");
+        assert_eq!(i.penalty_charges_outstanding().to_plain_string(), "0.00");
     }
 }

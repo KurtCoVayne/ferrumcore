@@ -193,6 +193,34 @@ impl Installment {
         portion
     }
 
+    // ----- WRITE OFF (set the written-off bucket to the outstanding) ------------------------------------------------
+
+    /// Write off the outstanding principal (Java `writeOffOutstandingPrincipal`): set the written-off amount to the
+    /// current outstanding and return it.
+    pub fn write_off_principal(&mut self) -> Money {
+        let due = self.principal_outstanding();
+        self.principal_written_off = due.amount().clone();
+        due
+    }
+    /// Write off the outstanding interest (Java `writeOffOutstandingInterest`).
+    pub fn write_off_interest(&mut self) -> Money {
+        let due = self.interest_outstanding();
+        self.interest_written_off = due.amount().clone();
+        due
+    }
+    /// Write off the outstanding fee charges (Java `writeOffOutstandingFeeCharges`).
+    pub fn write_off_fee(&mut self) -> Money {
+        let due = self.fee_charges_outstanding();
+        self.fee_charges_written_off = due.amount().clone();
+        due
+    }
+    /// Write off the outstanding penalty charges (Java `writeOffOutstandingPenaltyCharges`).
+    pub fn write_off_penalty(&mut self) -> Money {
+        let due = self.penalty_charges_outstanding();
+        self.penalty_charges_written_off = due.amount().clone();
+        due
+    }
+
     // ----- WAIVE (into the waived bucket) ---------------------------------------------------------------------------
 
     /// Consume `min(amount, penaltyOutstanding)` into the penalty *waived* bucket (Java `waivePenaltyChargesComponent`).

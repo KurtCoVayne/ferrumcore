@@ -989,6 +989,39 @@ pub fn process_repayment(
     }
 }
 
+/// `handleWriteOff` (advanced src 1927 → the legacy super `handleWriteOff`,
+/// `AbstractLoanRepaymentScheduleTransactionProcessor` src 764) for the non-interest-bearing / non-progressive path:
+/// write off every not-fully-paid installment's outstanding principal / interest / fee / penalty (setting each
+/// component's written-off amount to its outstanding), and return the aggregated written-off portions — the
+/// transaction's `updateComponentsAndTotal(principal, interest, fee, penalty)` tuple.
+#[must_use]
+pub fn handle_write_off(installments: &mut [AdvancedInstallment]) -> CreditComponents {
+    // Currency scale/mode come from any installment; the empty-schedule case (nothing to write off) is degenerate.
+    let zero = installments.first().map_or_else(
+        || Money::zero(2, RoundingMode::HalfEven),
+        |i| i.installment().zero(),
+    );
+    let mut principal = zero.clone();
+    let mut interest = zero.clone();
+    let mut fee = zero.clone();
+    let mut penalty = zero;
+    for inst in installments.iter_mut() {
+        if installment_not_fully_paid(inst) {
+            let i = inst.installment_mut();
+            principal = principal.plus(&i.write_off_principal());
+            interest = interest.plus(&i.write_off_interest());
+            fee = fee.plus(&i.write_off_fee());
+            penalty = penalty.plus(&i.write_off_penalty());
+        }
+    }
+    CreditComponents {
+        principal,
+        interest,
+        fee,
+        penalty,
+    }
+}
+
 /// `LoanTransactionType` — the transaction kinds `processLatestTransaction` switches on (src 564-582).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AdvancedTransactionType {
@@ -1041,8 +1074,9 @@ pub enum TransactionRoute {
 }
 
 /// Route a transaction type to its handler — the faithful transcription of the `processLatestTransaction` switch
-/// (src 564-582). The handler bodies for `Repayment` / `Chargeback` / `ChargePayment` / `Disbursement` are ported; the
-/// rest are pending (their arms select the route so the dispatch is complete).
+/// (src 564-582). The handler bodies for `Repayment` / `Chargeback` / `ChargePayment` / `Disbursement` / `WriteOff`
+/// are ported (see [`handle_write_off`]); the rest are pending (their arms select the route so the dispatch is
+/// complete).
 #[must_use]
 pub fn route_transaction(transaction_type: AdvancedTransactionType) -> TransactionRoute {
     use AdvancedTransactionType as T;
