@@ -49,6 +49,19 @@ impl Money {
         }
     }
 
+    /// `self / divisor` rounded to `scale` with a caller-chosen `mode` (Java `Money.dividedBy(divisor, MathContext)`
+    /// with an explicit `RoundingMode`). Used by the advanced payment-allocation IN_ADVANCE even-split's
+    /// `RoundingMode.DOWN` safety branch, which overrides the default rounding to guarantee the split cannot exceed the
+    /// dividend.
+    #[must_use]
+    pub fn divided_by_with_mode(&self, divisor: &BigDecimal, mode: RoundingMode) -> Self {
+        Self {
+            amount: decimal::div(&self.amount, divisor, self.scale, mode),
+            scale: self.scale,
+            mode: self.mode,
+        }
+    }
+
     /// A zero amount at `scale`/`mode` (Java `Money.zero(currency)`).
     #[must_use]
     pub fn zero(scale: i64, mode: RoundingMode) -> Self {

@@ -805,3 +805,94 @@ fn horizontal_walk_due_then_overpayment() {
     assert_eq!(paid.principal_completed().to_plain_string(), "100.00");
     assert_eq!(overpayment.to_plain_string(), "40.00");
 }
+
+/// IN_ADVANCE even-split — verified against the Java-app capture (`fcCaptureInAdvanceEvenSplit`, non-interest-bearing
+/// `processAllocationsHorizontally` path, src 2826-2877). Three future installments (from/due one month apart), a
+/// transaction on 2023-01-15 that precedes every due date, allocation `[IN_ADVANCE_PRINCIPAL]`. Covers the even split,
+/// HALF_EVEN round-to-even (100.01/2 = 50.005 → 50.00) with the last installment absorbing the +0.01 residual, the
+/// three-way remainder (33.33/33.33/33.34), and the NEXT/LAST/NEXT_LAST future-installment selection rules.
+#[test]
+fn horizontal_walk_in_advance_even_split() {
+    let froms = [
+        date(2023, Month::January, 1),
+        date(2023, Month::February, 1),
+        date(2023, Month::March, 1),
+    ];
+    let dues = [
+        date(2023, Month::February, 1),
+        date(2023, Month::March, 1),
+        date(2023, Month::April, 1),
+    ];
+    let txn_date = date(2023, Month::January, 15);
+    let allocations = [PaymentAllocation {
+        allocation_type: AllocationType::Principal,
+        due_type: DueType::InAdvance,
+    }];
+
+    let build = |count: usize| -> Vec<AdvancedInstallment> {
+        (0..count)
+            .map(|i| {
+                let inst = Installment::new(
+                    SCALE,
+                    MODE,
+                    dues[i],
+                    BigDecimal::from(100),
+                    BigDecimal::from(0),
+                    BigDecimal::from(0),
+                    BigDecimal::from(0),
+                );
+                AdvancedInstallment::new(inst, false).with_from_date(froms[i])
+            })
+            .collect()
+    };
+
+    let run = |rule, amount: &str, count: usize| -> (Vec<String>, String) {
+        let mut installments = build(count);
+        let overpayment = process_periods_horizontally(
+            &mut installments,
+            &allocations,
+            rule,
+            txn_date,
+            &money(amount),
+        );
+        let principals = installments
+            .iter()
+            .map(|i| i.installment().principal_completed().to_plain_string())
+            .collect();
+        (principals, overpayment.to_plain_string())
+    };
+
+    // 1. REAMORTIZATION, 100.00 over 2 → 50.00 / 50.00.
+    let (p, over) = run(FutureInstallmentAllocationRule::Reamortization, "100.00", 2);
+    assert_eq!(p, ["50.00", "50.00"]);
+    assert_eq!(over, "0.00");
+
+    // 2. REAMORTIZATION, 100.01 over 2 → 50.00 / 50.01 (round-to-even + last absorbs +0.01).
+    let (p, over) = run(FutureInstallmentAllocationRule::Reamortization, "100.01", 2);
+    assert_eq!(p, ["50.00", "50.01"]);
+    assert_eq!(over, "0.00");
+
+    // 3. REAMORTIZATION, 100.00 over 3 → 33.33 / 33.33 / 33.34 (last absorbs the remainder).
+    let (p, over) = run(FutureInstallmentAllocationRule::Reamortization, "100.00", 3);
+    assert_eq!(p, ["33.33", "33.33", "33.34"]);
+    assert_eq!(over, "0.00");
+
+    // 4. NEXT_INSTALLMENT → earliest future installment takes it all.
+    let (p, over) = run(FutureInstallmentAllocationRule::NextInstallment, "60.00", 2);
+    assert_eq!(p, ["60.00", "0.00"]);
+    assert_eq!(over, "0.00");
+
+    // 5. LAST_INSTALLMENT → latest future installment takes it all.
+    let (p, over) = run(FutureInstallmentAllocationRule::LastInstallment, "60.00", 2);
+    assert_eq!(p, ["0.00", "60.00"]);
+    assert_eq!(over, "0.00");
+
+    // 6. NEXT_LAST_INSTALLMENT → the "current" installment (period contains the txn date) = the first.
+    let (p, over) = run(
+        FutureInstallmentAllocationRule::NextLastInstallment,
+        "60.00",
+        2,
+    );
+    assert_eq!(p, ["60.00", "0.00"]);
+    assert_eq!(over, "0.00");
+}

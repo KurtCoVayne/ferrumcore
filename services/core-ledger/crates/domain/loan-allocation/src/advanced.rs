@@ -20,10 +20,14 @@
 //! 5. **Payment-allocation passthrough** (`handlingPaymentAllocationForInterestBearingProgressiveLoan`, src line 2884)
 //!    — paying the installment component then informing the [`EmiCalculator`] (`payPrincipal` / `payInterest`).
 //!
-//! **Out of scope** (the rest of the 4296-line processor + the EMI engine it drives): the progressive
-//! payment-allocation *walk* that selects installments/buckets (`processTransaction` →
-//! `processPeriodsHorizontally`/`Vertically`), the interest-recalculation EMI path
-//! (`processCreditTransactionWithEmiCalculator`),
+//! Also ported: the non-interest-bearing **horizontal payment-allocation walk** (`processPeriodsHorizontally` /
+//! `processAllocationsHorizontally`, src 2681/2696) — grouping allocations by [`DueType`], the `LoopGuard` do-while,
+//! PAST_DUE / DUE single-installment selection, and the IN_ADVANCE even-split across future installments
+//! ([`process_periods_horizontally`], verified against captured Java goldens).
+//!
+//! **Out of scope** (the rest of the 4296-line processor + the EMI engine it drives): the **vertical** walk
+//! (`processPeriodsVertically`, src 3011), the top-level `processLatestTransaction` transaction-type dispatcher, the
+//! interest-recalculation EMI path (`processCreditTransactionWithEmiCalculator`),
 //! re-age / re-amortize / capitalized-income, `adjustOriginalAllocationWithFormerChargebacks` for *prior* chargebacks,
 //! overpayment allocation, and charge reprocessing. The [`EmiCalculator`] is a **seam** (trait) here — its math lives
 //! in the separate progressive interest-schedule engine. The credited-* / `addToPrincipal` effects are modeled on a
@@ -717,17 +721,17 @@ pub fn process_periods_horizontally(
 }
 
 /// `processAllocationsHorizontally` (src line 2696) — the `LoopGuard` do-while (cap = installments×100) that, each
-/// iteration, selects the target installment for the group's `DueType` and applies each allocation type's component
+/// iteration, selects the target installment(s) for the group's `DueType` and applies each allocation type's component
 /// payment, subtracting from the unprocessed amount until exhausted or every installment is fully paid.
 ///
-/// **Scope:** PAST_DUE and DUE are ported and verified (the DUE path against the captured Java golden, PAST_DUE being
-/// the same code with the past-due selector). IN_ADVANCE (the even-split across future installments per
-/// `future_rule`, src 2826-2860) is the next bit — it sets the exit condition here pending its own captured golden.
+/// PAST_DUE / DUE select a single installment; IN_ADVANCE spreads the unprocessed amount **evenly** across the future
+/// installments chosen by `future_rule` (src 2826-2877). All three are verified against captured Java goldens (the
+/// non-interest-bearing `processPaymentAllocation` path).
 fn process_allocations_horizontally(
     installments: &mut [AdvancedInstallment],
     due_type: DueType,
     types: &[AllocationType],
-    _future_rule: FutureInstallmentAllocationRule,
+    future_rule: FutureInstallmentAllocationRule,
     txn_date: Date,
     amount: &Money,
 ) -> Money {
@@ -744,33 +748,106 @@ fn process_allocations_horizontally(
         {
             break;
         }
-        // The oldest past-due / the on-due installment = the earliest in the ordered list among not-fully-paid.
+        // The oldest past-due / the on-due installment = the earliest in the ordered list among not-fully-paid. The
+        // in-advance installments are selected per `future_rule` (all computed once per iteration, as Java does).
         let oldest_past_due = installments
             .iter()
             .position(|e| installment_not_fully_paid(e) && txn_date > e.due_date());
         let due = installments
             .iter()
             .position(|e| installment_not_fully_paid(e) && txn_date == e.due_date());
+        let in_advance = select_in_advance_installments(installments, future_rule, txn_date);
         for &at in types {
-            let target = match due_type {
-                DueType::PastDue => oldest_past_due,
-                DueType::Due => due,
-                DueType::InAdvance => None,
-            };
-            match (due_type, target) {
-                (DueType::InAdvance, _) => {
-                    // IN_ADVANCE even-split (src 2826-2860) — next bit; stop allocating this group for now.
-                    exit = true;
-                }
-                (_, Some(idx)) => {
-                    let allocated = pay_component(&mut installments[idx], at, &unprocessed);
-                    unprocessed = unprocessed.minus(&allocated);
-                }
-                (_, None) => {
-                    exit = true;
+            match due_type {
+                DueType::PastDue => match oldest_past_due {
+                    Some(idx) => {
+                        let allocated = pay_component(&mut installments[idx], at, &unprocessed);
+                        unprocessed = unprocessed.minus(&allocated);
+                    }
+                    None => exit = true,
+                },
+                DueType::Due => match due {
+                    Some(idx) => {
+                        let allocated = pay_component(&mut installments[idx], at, &unprocessed);
+                        unprocessed = unprocessed.minus(&allocated);
+                    }
+                    None => exit = true,
+                },
+                DueType::InAdvance => {
+                    let n = in_advance.len();
+                    if n == 0 {
+                        exit = true;
+                    } else {
+                        let n_bd = BigDecimal::from(n as i64);
+                        // `evenPortion = unprocessed / n` (default HALF_EVEN), `balanceAdjustment` = the rounding
+                        // residual that the last installment absorbs. The DOWN branch (src 2837-2845) is a guard
+                        // against the split exceeding the dividend; it is unreachable for non-negative transaction
+                        // amounts (for n=2 it needs evenPortion > unprocessed; for n>2 HALF_EVEN never rounds
+                        // `unprocessed/n` up past `unprocessed/(n-1)`) but is transcribed faithfully.
+                        let mut even = unprocessed.divided_by(&n_bd);
+                        let mut adjustment = unprocessed.minus(&even.multiplied_by(&n_bd));
+                        if even.plus(&adjustment).is_less_than_zero() {
+                            even = unprocessed.divided_by_with_mode(&n_bd, RoundingMode::Down);
+                            adjustment = unprocessed.minus(&even.multiplied_by(&n_bd));
+                        }
+                        for (j, &idx) in in_advance.iter().enumerate() {
+                            let portion = if j == n - 1 {
+                                even.plus(&adjustment)
+                            } else {
+                                even.clone()
+                            };
+                            let allocated = pay_component(&mut installments[idx], at, &portion);
+                            unprocessed = unprocessed.minus(&allocated);
+                        }
+                    }
                 }
             }
         }
     }
     unprocessed
+}
+
+/// Select the future ("in advance") installments an IN_ADVANCE amount spreads over, per `future_rule` (src 2733-2767).
+/// The non-interest-bearing filtering rule is `txn before dueDate && isNotFullyPaidOff`; returns indices in schedule
+/// (installment-number) order.
+fn select_in_advance_installments(
+    installments: &[AdvancedInstallment],
+    future_rule: FutureInstallmentAllocationRule,
+    txn_date: Date,
+) -> Vec<usize> {
+    let in_advance = |i: usize| {
+        installment_not_fully_paid(&installments[i]) && txn_date < installments[i].due_date()
+    };
+    match future_rule {
+        // All not-yet-due, not-fully-paid installments.
+        FutureInstallmentAllocationRule::Reamortization => {
+            (0..installments.len()).filter(|&i| in_advance(i)).collect()
+        }
+        // The earliest such installment (min installment number).
+        FutureInstallmentAllocationRule::NextInstallment => (0..installments.len())
+            .find(|&i| in_advance(i))
+            .into_iter()
+            .collect(),
+        // The latest such installment (max installment number).
+        FutureInstallmentAllocationRule::LastInstallment => (0..installments.len())
+            .rev()
+            .find(|&i| in_advance(i))
+            .into_iter()
+            .collect(),
+        // The "current" installment (period contains the txn date: txn on/after fromDate); else fall back to LAST.
+        FutureInstallmentAllocationRule::NextLastInstallment => {
+            let current: Vec<usize> = (0..installments.len())
+                .filter(|&i| in_advance(i) && txn_date >= installments[i].from_date())
+                .collect();
+            if current.is_empty() {
+                (0..installments.len())
+                    .rev()
+                    .find(|&i| in_advance(i))
+                    .into_iter()
+                    .collect()
+            } else {
+                current
+            }
+        }
+    }
 }
