@@ -20,13 +20,15 @@
 //! 5. **Payment-allocation passthrough** (`handlingPaymentAllocationForInterestBearingProgressiveLoan`, src line 2884)
 //!    — paying the installment component then informing the [`EmiCalculator`] (`payPrincipal` / `payInterest`).
 //!
-//! Also ported: the non-interest-bearing **horizontal payment-allocation walk** (`processPeriodsHorizontally` /
-//! `processAllocationsHorizontally`, src 2681/2696) — grouping allocations by [`DueType`], the `LoopGuard` do-while,
-//! PAST_DUE / DUE single-installment selection, and the IN_ADVANCE even-split across future installments
-//! ([`process_periods_horizontally`], verified against captured Java goldens).
+//! Also ported: the non-interest-bearing **payment-allocation walk**, both orientations — **horizontal**
+//! (`processPeriodsHorizontally` / `processAllocationsHorizontally`, src 2681/2696: allocations grouped by [`DueType`],
+//! the `LoopGuard` do-while, PAST_DUE / DUE single-installment selection, IN_ADVANCE even-split — see
+//! [`process_periods_horizontally`]) and **vertical** (`processPeriodsVertically`, src 3011: each allocation type
+//! exhausted across its installments before the next — see [`process_periods_vertically`]). Both are verified against
+//! captured Java goldens.
 //!
-//! **Out of scope** (the rest of the 4296-line processor + the EMI engine it drives): the **vertical** walk
-//! (`processPeriodsVertically`, src 3011), the top-level `processLatestTransaction` transaction-type dispatcher, the
+//! **Out of scope** (the rest of the 4296-line processor + the EMI engine it drives): the top-level
+//! `processLatestTransaction` transaction-type dispatcher, the
 //! interest-recalculation EMI path (`processCreditTransactionWithEmiCalculator`),
 //! re-age / re-amortize / capitalized-income, `adjustOriginalAllocationWithFormerChargebacks` for *prior* chargebacks,
 //! overpayment allocation, and charge reprocessing. The [`EmiCalculator`] is a **seam** (trait) here — its math lives
@@ -756,7 +758,12 @@ fn process_allocations_horizontally(
         let due = installments
             .iter()
             .position(|e| installment_not_fully_paid(e) && txn_date == e.due_date());
-        let in_advance = select_in_advance_installments(installments, future_rule, txn_date);
+        let in_advance = select_in_advance_installments(
+            installments,
+            future_rule,
+            txn_date,
+            installment_not_fully_paid,
+        );
         for &at in types {
             match due_type {
                 DueType::PastDue => match oldest_past_due {
@@ -807,17 +814,17 @@ fn process_allocations_horizontally(
     unprocessed
 }
 
-/// Select the future ("in advance") installments an IN_ADVANCE amount spreads over, per `future_rule` (src 2733-2767).
-/// The non-interest-bearing filtering rule is `txn before dueDate && isNotFullyPaidOff`; returns indices in schedule
-/// (installment-number) order.
+/// Select the future ("in advance") installments an IN_ADVANCE amount spreads over, per `future_rule` (src 2733-2767 /
+/// 3104-3142). An installment is a candidate when it is `eligible` (the horizontal walk uses `isNotFullyPaidOff`; the
+/// vertical walk uses the allocation type's component-outstanding predicate) **and** the txn precedes its due date;
+/// returns indices in schedule (installment-number) order.
 fn select_in_advance_installments(
     installments: &[AdvancedInstallment],
     future_rule: FutureInstallmentAllocationRule,
     txn_date: Date,
+    eligible: impl Fn(&AdvancedInstallment) -> bool,
 ) -> Vec<usize> {
-    let in_advance = |i: usize| {
-        installment_not_fully_paid(&installments[i]) && txn_date < installments[i].due_date()
-    };
+    let in_advance = |i: usize| eligible(&installments[i]) && txn_date < installments[i].due_date();
     match future_rule {
         // All not-yet-due, not-fully-paid installments.
         FutureInstallmentAllocationRule::Reamortization => {
@@ -850,4 +857,102 @@ fn select_in_advance_installments(
             }
         }
     }
+}
+
+/// `getFilterPredicate` (src line 3208): whether the allocation type's component still has an outstanding balance on
+/// this installment. The vertical walk selects installments by this per-component predicate (unlike the horizontal
+/// walk's whole-installment `isNotFullyPaidOff`).
+fn component_outstanding_gt0(inst: &AdvancedInstallment, at: AllocationType) -> bool {
+    let i = inst.installment();
+    match at {
+        AllocationType::Principal => i.principal_outstanding().is_greater_than_zero(),
+        AllocationType::Interest => i.interest_outstanding().is_greater_than_zero(),
+        AllocationType::Fee => i.fee_charges_outstanding().is_greater_than_zero(),
+        AllocationType::Penalty => i.penalty_charges_outstanding().is_greater_than_zero(),
+    }
+}
+
+/// `processPeriodsVertically` (src line 3011) for the **non-interest-bearing** path: iterate the rule's allocation
+/// types in order; for each, run a `LoopGuard` do-while that keeps paying that one component across the installments it
+/// applies to — PAST_DUE = the oldest past-due installment with that component outstanding, DUE = the on-due one,
+/// IN_ADVANCE = an even-split across the future installments selected by `future_rule` — until no matching installment
+/// remains, the amount is exhausted, or the last step allocated nothing. (Unlike the horizontal IN_ADVANCE branch,
+/// the vertical one has no `RoundingMode.DOWN` guard.) Returns the unprocessed amount (the overpayment).
+#[must_use]
+pub fn process_periods_vertically(
+    installments: &mut [AdvancedInstallment],
+    allocations: &[PaymentAllocation],
+    future_rule: FutureInstallmentAllocationRule,
+    txn_date: Date,
+    amount: &Money,
+) -> Money {
+    let mut unprocessed = amount.clone();
+    let cap = installments.len().saturating_mul(100);
+    for alloc in allocations {
+        let at = alloc.allocation_type;
+        // DO-while (LoopGuard): the body always runs once; it repeats while an installment was selected, the amount is
+        // not exhausted, and the last step allocated something.
+        for _ in 0..cap {
+            let (installment_found, allocated_gt0) = match alloc.due_type {
+                DueType::PastDue => match installments
+                    .iter()
+                    .position(|e| component_outstanding_gt0(e, at) && txn_date > e.due_date())
+                {
+                    Some(idx) => {
+                        let allocated = pay_component(&mut installments[idx], at, &unprocessed);
+                        let gt0 = allocated.is_greater_than_zero();
+                        unprocessed = unprocessed.minus(&allocated);
+                        (true, gt0)
+                    }
+                    None => (false, false),
+                },
+                DueType::Due => match installments
+                    .iter()
+                    .position(|e| component_outstanding_gt0(e, at) && txn_date == e.due_date())
+                {
+                    Some(idx) => {
+                        let allocated = pay_component(&mut installments[idx], at, &unprocessed);
+                        let gt0 = allocated.is_greater_than_zero();
+                        unprocessed = unprocessed.minus(&allocated);
+                        (true, gt0)
+                    }
+                    None => (false, false),
+                },
+                DueType::InAdvance => {
+                    let list = select_in_advance_installments(
+                        installments,
+                        future_rule,
+                        txn_date,
+                        |inst| component_outstanding_gt0(inst, at),
+                    );
+                    let n = list.len();
+                    if n == 0 {
+                        (false, false)
+                    } else {
+                        let n_bd = BigDecimal::from(n as i64);
+                        let even = unprocessed.divided_by(&n_bd);
+                        let adjustment = unprocessed.minus(&even.multiplied_by(&n_bd));
+                        let mut any_gt0 = false;
+                        for (j, &idx) in list.iter().enumerate() {
+                            let portion = if j == n - 1 {
+                                even.plus(&adjustment)
+                            } else {
+                                even.clone()
+                            };
+                            let paid = pay_component(&mut installments[idx], at, &portion);
+                            if paid.is_greater_than_zero() {
+                                any_gt0 = true;
+                            }
+                            unprocessed = unprocessed.minus(&paid);
+                        }
+                        (true, any_gt0)
+                    }
+                }
+            };
+            if !(installment_found && unprocessed.is_greater_than_zero() && allocated_gt0) {
+                break;
+            }
+        }
+    }
+    unprocessed
 }

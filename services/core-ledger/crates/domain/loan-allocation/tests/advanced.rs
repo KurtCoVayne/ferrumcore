@@ -18,7 +18,7 @@ use fc_loan_allocation::advanced::{
     RelationType, ScheduleModel, TxnChange, TxnRelation, calculate_chargeback_allocation_map,
     find_chargeback_original_transaction, handle_charge_payment, handle_disbursement_with_emi,
     handle_payment_allocation_interest_bearing, process_credit_transaction,
-    process_periods_horizontally,
+    process_periods_horizontally, process_periods_vertically,
 };
 use fc_money::Money;
 use time::{Date, Month};
@@ -895,4 +895,142 @@ fn horizontal_walk_in_advance_even_split() {
     );
     assert_eq!(p, ["60.00", "0.00"]);
     assert_eq!(over, "0.00");
+}
+
+/// An installment with `principal`/`interest` charged (no fees), `from`/`due` a month apart.
+fn pi_installment(from: Date, due: Date, principal: &str, interest: &str) -> AdvancedInstallment {
+    let inst = Installment::new(
+        SCALE,
+        MODE,
+        due,
+        BigDecimal::parse_bytes(principal.as_bytes(), 10).unwrap(),
+        BigDecimal::parse_bytes(interest.as_bytes(), 10).unwrap(),
+        BigDecimal::from(0),
+        BigDecimal::from(0),
+    );
+    AdvancedInstallment::new(inst, false).with_from_date(from)
+}
+
+/// The VERTICAL walk (`processPeriodsVertically`, src 3011) — verified against the Java-app capture
+/// (`fcCaptureVerticalWalk`, non-interest-bearing path). Each allocation type is exhausted across the applicable
+/// installments (its own do-while) before the next type. Covers PAST_DUE exhaust across two installments, the
+/// IN_ADVANCE even-split (no DOWN guard), and a mixed PAST_DUE→DUE→IN_ADVANCE principal run.
+#[test]
+fn vertical_walk_matches_capture() {
+    let froms = [
+        date(2023, Month::January, 1),
+        date(2023, Month::February, 1),
+        date(2023, Month::March, 1),
+    ];
+    let dues = [
+        date(2023, Month::February, 1),
+        date(2023, Month::March, 1),
+        date(2023, Month::April, 1),
+    ];
+
+    // V1: [PAST_DUE_PRINCIPAL, PAST_DUE_INTEREST] over two past-due installments (100/10 each), amount 250.
+    // → both fully paid (P 100, I 10), 30 overpaid.
+    let mut v1 = [
+        pi_installment(froms[0], dues[0], "100", "10"),
+        pi_installment(froms[1], dues[1], "100", "10"),
+    ];
+    let over = process_periods_vertically(
+        &mut v1,
+        &[
+            PaymentAllocation {
+                allocation_type: AllocationType::Principal,
+                due_type: DueType::PastDue,
+            },
+            PaymentAllocation {
+                allocation_type: AllocationType::Interest,
+                due_type: DueType::PastDue,
+            },
+        ],
+        FutureInstallmentAllocationRule::Reamortization,
+        date(2023, Month::April, 1),
+        &money("250"),
+    );
+    assert_eq!(
+        v1[0].installment().principal_completed().to_plain_string(),
+        "100.00"
+    );
+    assert_eq!(
+        v1[0].installment().interest_outstanding().to_plain_string(),
+        "0.00"
+    );
+    assert_eq!(
+        v1[1].installment().principal_completed().to_plain_string(),
+        "100.00"
+    );
+    assert_eq!(
+        v1[1].installment().interest_outstanding().to_plain_string(),
+        "0.00"
+    );
+    assert_eq!(over.to_plain_string(), "30.00");
+
+    // V2: [IN_ADVANCE_PRINCIPAL] REAMORTIZATION, 100.01 over two future installments → 50.00 / 50.01.
+    let mut v2 = [
+        pi_installment(froms[0], dues[0], "100", "0"),
+        pi_installment(froms[1], dues[1], "100", "0"),
+    ];
+    let over = process_periods_vertically(
+        &mut v2,
+        &[PaymentAllocation {
+            allocation_type: AllocationType::Principal,
+            due_type: DueType::InAdvance,
+        }],
+        FutureInstallmentAllocationRule::Reamortization,
+        date(2023, Month::January, 15),
+        &money("100.01"),
+    );
+    assert_eq!(
+        v2[0].installment().principal_completed().to_plain_string(),
+        "50.00"
+    );
+    assert_eq!(
+        v2[1].installment().principal_completed().to_plain_string(),
+        "50.01"
+    );
+    assert_eq!(over.to_plain_string(), "0.00");
+
+    // V3: mixed [PAST_DUE, DUE, IN_ADVANCE] principal over three installments, txn on the 2nd's due date, amount 250
+    // → 100 / 100 / 50.
+    let mut v3 = [
+        pi_installment(froms[0], dues[0], "100", "0"),
+        pi_installment(froms[1], dues[1], "100", "0"),
+        pi_installment(froms[2], dues[2], "100", "0"),
+    ];
+    let over = process_periods_vertically(
+        &mut v3,
+        &[
+            PaymentAllocation {
+                allocation_type: AllocationType::Principal,
+                due_type: DueType::PastDue,
+            },
+            PaymentAllocation {
+                allocation_type: AllocationType::Principal,
+                due_type: DueType::Due,
+            },
+            PaymentAllocation {
+                allocation_type: AllocationType::Principal,
+                due_type: DueType::InAdvance,
+            },
+        ],
+        FutureInstallmentAllocationRule::Reamortization,
+        date(2023, Month::March, 1),
+        &money("250"),
+    );
+    assert_eq!(
+        v3[0].installment().principal_completed().to_plain_string(),
+        "100.00"
+    );
+    assert_eq!(
+        v3[1].installment().principal_completed().to_plain_string(),
+        "100.00"
+    );
+    assert_eq!(
+        v3[2].installment().principal_completed().to_plain_string(),
+        "50.00"
+    );
+    assert_eq!(over.to_plain_string(), "0.00");
 }
