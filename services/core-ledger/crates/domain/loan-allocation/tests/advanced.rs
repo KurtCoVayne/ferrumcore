@@ -13,12 +13,13 @@
 use bigdecimal::{BigDecimal, RoundingMode};
 use fc_loan_allocation::Installment;
 use fc_loan_allocation::advanced::{
-    AdvancedInstallment, AllocationType, ChangedTransactionDetail, DueType, EmiCalculator,
-    FutureInstallmentAllocationRule, LoanTxnView, OriginalAllocation, PaymentAllocation,
-    RelationType, ScheduleModel, TxnChange, TxnRelation, calculate_chargeback_allocation_map,
+    AdvancedInstallment, AdvancedTransactionType, AllocationType, ChangedTransactionDetail,
+    DueType, EmiCalculator, FutureInstallmentAllocationRule, LoanTxnView, OriginalAllocation,
+    PaymentAllocation, RelationType, ScheduleModel, ScheduleProcessingType, TransactionRoute,
+    TxnChange, TxnRelation, calculate_chargeback_allocation_map,
     find_chargeback_original_transaction, handle_charge_payment, handle_disbursement_with_emi,
     handle_payment_allocation_interest_bearing, process_credit_transaction,
-    process_periods_horizontally, process_periods_vertically,
+    process_periods_horizontally, process_periods_vertically, process_repayment, route_transaction,
 };
 use fc_money::Money;
 use time::{Date, Month};
@@ -1033,4 +1034,95 @@ fn vertical_walk_matches_capture() {
         "50.00"
     );
     assert_eq!(over.to_plain_string(), "0.00");
+}
+
+/// The top-level repayment entry (`processTransaction` → `processPeriods`, src 2648/2668) dispatches to the configured
+/// walk orientation and returns the overpayment. Both arms run the IN_ADVANCE 100.01 split → 50.00 / 50.01.
+#[test]
+fn process_repayment_dispatches_both_orientations() {
+    let froms = [
+        date(2023, Month::January, 1),
+        date(2023, Month::February, 1),
+    ];
+    let dues = [date(2023, Month::February, 1), date(2023, Month::March, 1)];
+    let allocations = [PaymentAllocation {
+        allocation_type: AllocationType::Principal,
+        due_type: DueType::InAdvance,
+    }];
+    for pt in [
+        ScheduleProcessingType::Horizontal,
+        ScheduleProcessingType::Vertical,
+    ] {
+        let mut insts = [
+            pi_installment(froms[0], dues[0], "100", "0"),
+            pi_installment(froms[1], dues[1], "100", "0"),
+        ];
+        let over = process_repayment(
+            &mut insts,
+            &allocations,
+            FutureInstallmentAllocationRule::Reamortization,
+            pt,
+            date(2023, Month::January, 15),
+            &money("100.01"),
+        );
+        assert_eq!(
+            insts[0]
+                .installment()
+                .principal_completed()
+                .to_plain_string(),
+            "50.00",
+            "{pt:?} inst0"
+        );
+        assert_eq!(
+            insts[1]
+                .installment()
+                .principal_completed()
+                .to_plain_string(),
+            "50.01",
+            "{pt:?} inst1"
+        );
+        assert_eq!(over.to_plain_string(), "0.00", "{pt:?} overpayment");
+    }
+}
+
+/// `route_transaction` faithfully mirrors the `processLatestTransaction` switch (src 564-582): the whole REPAYMENT
+/// family folds onto `Repayment`, WAIVE_CHARGES is a logged no-op, every other type has its own handler.
+#[test]
+fn route_transaction_matches_java_switch() {
+    use AdvancedTransactionType as T;
+    let cases = [
+        (T::Disbursement, TransactionRoute::Disbursement),
+        (T::WriteOff, TransactionRoute::WriteOff),
+        (T::RefundForActiveLoan, TransactionRoute::Refund),
+        (T::Chargeback, TransactionRoute::Chargeback),
+        (
+            T::CreditBalanceRefund,
+            TransactionRoute::CreditBalanceRefund,
+        ),
+        (T::Repayment, TransactionRoute::Repayment),
+        (T::MerchantIssuedRefund, TransactionRoute::Repayment),
+        (T::PayoutRefund, TransactionRoute::Repayment),
+        (T::GoodwillCredit, TransactionRoute::Repayment),
+        (T::ChargeRefund, TransactionRoute::Repayment),
+        (T::ChargeAdjustment, TransactionRoute::Repayment),
+        (T::DownPayment, TransactionRoute::Repayment),
+        (T::WaiveInterest, TransactionRoute::Repayment),
+        (T::RecoveryRepayment, TransactionRoute::Repayment),
+        (T::InterestPaymentWaiver, TransactionRoute::Repayment),
+        (T::CapitalizedIncomeAdjustment, TransactionRoute::Repayment),
+        (T::InterestRefund, TransactionRoute::InterestRefund),
+        (T::ChargeOff, TransactionRoute::ChargeOff),
+        (T::ChargePayment, TransactionRoute::ChargePayment),
+        (T::WaiveCharges, TransactionRoute::WaiveChargesNoop),
+        (T::ReAmortize, TransactionRoute::ReAmortize),
+        (T::ReAge, TransactionRoute::ReAge),
+        (T::CapitalizedIncome, TransactionRoute::CapitalizedIncome),
+        (
+            T::ContractTermination,
+            TransactionRoute::ContractTermination,
+        ),
+    ];
+    for (t, expected) in cases {
+        assert_eq!(route_transaction(t), expected, "route for {t:?}");
+    }
 }

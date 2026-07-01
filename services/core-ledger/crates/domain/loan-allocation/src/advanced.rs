@@ -956,3 +956,120 @@ pub fn process_periods_vertically(
     }
     unprocessed
 }
+
+/// `LoanScheduleProcessingType` — whether the allocation walk runs horizontally (by due-type, across buckets) or
+/// vertically (by bucket, across installments). `processPeriods` (src 2668) branches on `isHorizontal()`/`isVertical()`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScheduleProcessingType {
+    /// `LoanScheduleProcessingType.HORIZONTAL`.
+    Horizontal,
+    /// `LoanScheduleProcessingType.VERTICAL`.
+    Vertical,
+}
+
+/// `handleRepayment` → `processTransaction` → `processPeriods` (src 1968 / 2648 / 2668) for the non-interest-bearing
+/// repayment family: run the payment-allocation walk in the loan's configured orientation and return the amount left
+/// unprocessed — the overpayment that `handleOverpayment` (src 2066) would record on the overpayment holder.
+#[must_use]
+pub fn process_repayment(
+    installments: &mut [AdvancedInstallment],
+    allocations: &[PaymentAllocation],
+    future_rule: FutureInstallmentAllocationRule,
+    processing_type: ScheduleProcessingType,
+    txn_date: Date,
+    amount: &Money,
+) -> Money {
+    match processing_type {
+        ScheduleProcessingType::Horizontal => {
+            process_periods_horizontally(installments, allocations, future_rule, txn_date, amount)
+        }
+        ScheduleProcessingType::Vertical => {
+            process_periods_vertically(installments, allocations, future_rule, txn_date, amount)
+        }
+    }
+}
+
+/// `LoanTransactionType` — the transaction kinds `processLatestTransaction` switches on (src 564-582).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdvancedTransactionType {
+    Disbursement,
+    WriteOff,
+    RefundForActiveLoan,
+    Chargeback,
+    CreditBalanceRefund,
+    Repayment,
+    MerchantIssuedRefund,
+    PayoutRefund,
+    GoodwillCredit,
+    ChargeRefund,
+    ChargeAdjustment,
+    DownPayment,
+    WaiveInterest,
+    RecoveryRepayment,
+    InterestPaymentWaiver,
+    CapitalizedIncomeAdjustment,
+    InterestRefund,
+    ChargeOff,
+    ChargePayment,
+    WaiveCharges,
+    ReAmortize,
+    ReAge,
+    CapitalizedIncome,
+    ContractTermination,
+}
+
+/// The handler `processLatestTransaction` dispatches a transaction type to (src 564-582). The whole REPAYMENT family
+/// (REPAYMENT / MERCHANT_ISSUED_REFUND / PAYOUT_REFUND / GOODWILL_CREDIT / CHARGE_REFUND / CHARGE_ADJUSTMENT /
+/// DOWN_PAYMENT / WAIVE_INTEREST / RECOVERY_REPAYMENT / INTEREST_PAYMENT_WAIVER / CAPITALIZED_INCOME_ADJUSTMENT) routes
+/// to [`TransactionRoute::Repayment`] (`handleRepayment` → the walk). WAIVE_CHARGES is logged only (a no-op).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransactionRoute {
+    Disbursement,
+    WriteOff,
+    Refund,
+    Chargeback,
+    CreditBalanceRefund,
+    Repayment,
+    InterestRefund,
+    ChargeOff,
+    ChargePayment,
+    WaiveChargesNoop,
+    ReAmortize,
+    ReAge,
+    CapitalizedIncome,
+    ContractTermination,
+}
+
+/// Route a transaction type to its handler — the faithful transcription of the `processLatestTransaction` switch
+/// (src 564-582). The handler bodies for `Repayment` / `Chargeback` / `ChargePayment` / `Disbursement` are ported; the
+/// rest are pending (their arms select the route so the dispatch is complete).
+#[must_use]
+pub fn route_transaction(transaction_type: AdvancedTransactionType) -> TransactionRoute {
+    use AdvancedTransactionType as T;
+    match transaction_type {
+        T::Disbursement => TransactionRoute::Disbursement,
+        T::WriteOff => TransactionRoute::WriteOff,
+        T::RefundForActiveLoan => TransactionRoute::Refund,
+        T::Chargeback => TransactionRoute::Chargeback,
+        T::CreditBalanceRefund => TransactionRoute::CreditBalanceRefund,
+        T::Repayment
+        | T::MerchantIssuedRefund
+        | T::PayoutRefund
+        | T::GoodwillCredit
+        | T::ChargeRefund
+        | T::ChargeAdjustment
+        | T::DownPayment
+        | T::WaiveInterest
+        | T::RecoveryRepayment
+        | T::InterestPaymentWaiver
+        | T::CapitalizedIncomeAdjustment => TransactionRoute::Repayment,
+        T::InterestRefund => TransactionRoute::InterestRefund,
+        T::ChargeOff => TransactionRoute::ChargeOff,
+        T::ChargePayment => TransactionRoute::ChargePayment,
+        T::WaiveCharges => TransactionRoute::WaiveChargesNoop,
+        T::ReAmortize => TransactionRoute::ReAmortize,
+        T::ReAge => TransactionRoute::ReAge,
+        T::CapitalizedIncome => TransactionRoute::CapitalizedIncome,
+        T::ContractTermination => TransactionRoute::ContractTermination,
+    }
+}
