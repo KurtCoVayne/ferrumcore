@@ -133,6 +133,16 @@ impl Installment {
         self.money(&self.principal)
     }
 
+    /// `getTotalPaid` (Java line 1099): penalty paid + fee paid + interest paid + principal completed — the
+    /// refund-eligibility measure (an installment can be refunded only while something has been paid on it).
+    #[must_use]
+    pub fn total_paid(&self) -> Money {
+        self.money(&self.penalty_charges_paid)
+            .plus(&self.money(&self.fee_charges_paid))
+            .plus(&self.money(&self.interest_paid))
+            .plus(&self.money(&self.principal_completed))
+    }
+
     /// Replace the charged principal (Java `updatePrincipal` / `setPrincipal`) — re-amortization zeroes a past
     /// installment's remaining principal by setting the charge to what was already completed.
     pub fn update_principal(&mut self, principal: &Money) {

@@ -18,9 +18,9 @@ use fc_loan_allocation::advanced::{
     PaymentAllocation, RelationType, ScheduleModel, ScheduleProcessingType, TransactionRoute,
     TxnChange, TxnRelation, calculate_chargeback_allocation_map,
     find_chargeback_original_transaction, handle_charge_payment, handle_disbursement_with_emi,
-    handle_payment_allocation_interest_bearing, handle_re_amortization, handle_write_off,
-    process_credit_transaction, process_periods_horizontally, process_periods_vertically,
-    process_repayment, route_transaction,
+    handle_payment_allocation_interest_bearing, handle_re_amortization, handle_refund,
+    handle_write_off, process_credit_transaction, process_periods_horizontally,
+    process_periods_vertically, process_repayment, route_transaction,
 };
 use fc_money::Money;
 use time::{Date, Month};
@@ -1239,4 +1239,123 @@ fn re_amortization_matches_capture() {
         .map(|i| i.installment().principal().to_plain_string())
         .collect();
     assert_eq!(principals, ["40.00", "0.00", "150.00", "150.00", "160.00"]);
+}
+
+/// `handleRefund` (src 1374) — verified against the Java-app capture (`fcCaptureRefund`).
+///
+/// F1 (horizontal, DEFAULT rule): dues Feb/Mar/Apr paid 100/60/40, refund 130 on Mar 15. The default rule
+/// `[PAST_DUE_P, DUE_P, IN_ADVANCE_P]` reverses to `[IN_ADVANCE_P, DUE_P, PAST_DUE_P]` with LAST_INSTALLMENT:
+/// IN_ADVANCE unpays 40 off #3, DUE finds nothing, PAST_DUE unpays latest-first (60 off #2, then 30 off #1)
+/// → 70 / 0 / 0.
+///
+/// F2 (vertical, custom rule + REAMORTIZATION): dues Feb/Apr/May paid 20/50/50, refund 120.01 on Mar 15. PAST_DUE
+/// unpays 20 off #1; IN_ADVANCE splits 100.01 → 50.00 / 50.01, both capped at the 50 paid → 0 / 0 / 0 with 0.01
+/// unallocatable.
+#[test]
+fn refund_matches_capture() {
+    let txn_date = date(2023, Month::March, 15);
+
+    // F1: horizontal, default rule.
+    let mut f1 = [
+        pi_installment(
+            date(2023, Month::January, 1),
+            date(2023, Month::February, 1),
+            "100",
+            "0",
+        ),
+        pi_installment(
+            date(2023, Month::February, 1),
+            date(2023, Month::March, 1),
+            "100",
+            "0",
+        ),
+        pi_installment(
+            date(2023, Month::March, 1),
+            date(2023, Month::April, 1),
+            "100",
+            "0",
+        ),
+    ];
+    let _ = f1[0].installment_mut().pay_principal(&money("100"));
+    let _ = f1[1].installment_mut().pay_principal(&money("60"));
+    let _ = f1[2].installment_mut().pay_principal(&money("40"));
+    let allocations = [
+        PaymentAllocation {
+            allocation_type: AllocationType::Principal,
+            due_type: DueType::PastDue,
+        },
+        PaymentAllocation {
+            allocation_type: AllocationType::Principal,
+            due_type: DueType::Due,
+        },
+        PaymentAllocation {
+            allocation_type: AllocationType::Principal,
+            due_type: DueType::InAdvance,
+        },
+    ];
+    let unprocessed = handle_refund(
+        &mut f1,
+        &allocations,
+        FutureInstallmentAllocationRule::NextInstallment, // ignored: the default rule forces LAST_INSTALLMENT
+        ScheduleProcessingType::Horizontal,
+        txn_date,
+        &money("130"),
+        true,
+    );
+    let done: Vec<String> = f1
+        .iter()
+        .map(|i| i.installment().principal_completed().to_plain_string())
+        .collect();
+    assert_eq!(done, ["70.00", "0.00", "0.00"]);
+    assert_eq!(unprocessed.to_plain_string(), "0.00");
+
+    // F2: vertical, custom rule with REAMORTIZATION.
+    let mut f2 = [
+        pi_installment(
+            date(2023, Month::January, 1),
+            date(2023, Month::February, 1),
+            "100",
+            "0",
+        ),
+        pi_installment(
+            date(2023, Month::March, 1),
+            date(2023, Month::April, 1),
+            "100",
+            "0",
+        ),
+        pi_installment(
+            date(2023, Month::April, 1),
+            date(2023, Month::May, 1),
+            "100",
+            "0",
+        ),
+    ];
+    let _ = f2[0].installment_mut().pay_principal(&money("20"));
+    let _ = f2[1].installment_mut().pay_principal(&money("50"));
+    let _ = f2[2].installment_mut().pay_principal(&money("50"));
+    let allocations = [
+        PaymentAllocation {
+            allocation_type: AllocationType::Principal,
+            due_type: DueType::PastDue,
+        },
+        PaymentAllocation {
+            allocation_type: AllocationType::Principal,
+            due_type: DueType::InAdvance,
+        },
+    ];
+    let unprocessed = handle_refund(
+        &mut f2,
+        &allocations,
+        FutureInstallmentAllocationRule::Reamortization,
+        ScheduleProcessingType::Vertical,
+        txn_date,
+        &money("120.01"),
+        false,
+    );
+    let done: Vec<String> = f2
+        .iter()
+        .map(|i| i.installment().principal_completed().to_plain_string())
+        .collect();
+    assert_eq!(done, ["0.00", "0.00", "0.00"]);
+    assert_eq!(unprocessed.to_plain_string(), "0.01");
 }

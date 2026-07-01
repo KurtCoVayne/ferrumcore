@@ -1028,6 +1028,237 @@ pub fn handle_write_off(installments: &mut [AdvancedInstallment]) -> CreditCompo
     }
 }
 
+/// `processPaymentAllocation(.., PaymentAction.UNPAY)`'s component leaf: reverse (refund) `min(amount, paid)` out of
+/// the component's paid bucket via the [`Installment`] `unpay_*` atoms, returning the deducted portion.
+fn unpay_component(
+    inst: &mut AdvancedInstallment,
+    allocation_type: AllocationType,
+    amount: &Money,
+) -> Money {
+    let i = inst.installment_mut();
+    match allocation_type {
+        AllocationType::Penalty => i.unpay_penalty(amount),
+        AllocationType::Fee => i.unpay_fee(amount),
+        AllocationType::Interest => i.unpay_interest(amount),
+        AllocationType::Principal => i.unpay_principal(amount),
+    }
+}
+
+/// The refund walk's eligibility: `getTotalPaid(currency).isGreaterThanZero()` — something must have been paid on the
+/// installment for a refund to pull back.
+fn installment_total_paid_gt0(inst: &AdvancedInstallment) -> bool {
+    inst.installment().total_paid().is_greater_than_zero()
+}
+
+/// `refundTransactionHorizontally` (src 2418) — the refund counterpart of [`process_allocations_horizontally`]: the
+/// same `LoopGuard` do-while over one due-type group, but selecting the **latest** (max installment number) paid
+/// installment for PAST_DUE / DUE, spreading IN_ADVANCE across the paid future installments per `future_rule` (even
+/// split, last absorbs the rounding residual, no DOWN guard), and applying the `UNPAY` leaves.
+fn refund_allocations_horizontally(
+    installments: &mut [AdvancedInstallment],
+    due_type: DueType,
+    types: &[AllocationType],
+    future_rule: FutureInstallmentAllocationRule,
+    txn_date: Date,
+    amount: &Money,
+) -> Money {
+    let mut unprocessed = amount.clone();
+    let cap = installments.len().saturating_mul(100);
+    let mut exit = false;
+    for _ in 0..cap {
+        if exit
+            || !unprocessed.is_greater_than_zero()
+            || !installments.iter().any(installment_total_paid_gt0)
+        {
+            break;
+        }
+        let latest_past_due = (0..installments.len()).rev().find(|&i| {
+            installment_total_paid_gt0(&installments[i]) && txn_date > installments[i].due_date()
+        });
+        let due = (0..installments.len()).rev().find(|&i| {
+            installment_total_paid_gt0(&installments[i]) && txn_date == installments[i].due_date()
+        });
+        let in_advance = select_in_advance_installments(
+            installments,
+            future_rule,
+            txn_date,
+            installment_total_paid_gt0,
+        );
+        for &at in types {
+            match due_type {
+                DueType::PastDue | DueType::Due => {
+                    let target = if due_type == DueType::PastDue {
+                        latest_past_due
+                    } else {
+                        due
+                    };
+                    match target {
+                        Some(idx) => {
+                            let deducted =
+                                unpay_component(&mut installments[idx], at, &unprocessed);
+                            unprocessed = unprocessed.minus(&deducted);
+                        }
+                        None => exit = true,
+                    }
+                }
+                DueType::InAdvance => {
+                    let n = in_advance.len();
+                    if n == 0 {
+                        exit = true;
+                    } else {
+                        let n_bd = BigDecimal::from(n as i64);
+                        let even = unprocessed.divided_by(&n_bd);
+                        let adjustment = unprocessed.minus(&even.multiplied_by(&n_bd));
+                        for (j, &idx) in in_advance.iter().enumerate() {
+                            let portion = if j == n - 1 {
+                                even.plus(&adjustment)
+                            } else {
+                                even.clone()
+                            };
+                            let deducted = unpay_component(&mut installments[idx], at, &portion);
+                            unprocessed = unprocessed.minus(&deducted);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    unprocessed
+}
+
+/// `refundTransactionVertically` (src 2512) — the refund counterpart of [`process_periods_vertically`]'s inner
+/// do-while for one allocation type: keep pulling the component back from the latest paid installment (PAST_DUE / DUE)
+/// or the paid future installments (IN_ADVANCE even-split) while the last step both found an installment and deducted
+/// something.
+fn refund_vertically(
+    installments: &mut [AdvancedInstallment],
+    alloc: PaymentAllocation,
+    future_rule: FutureInstallmentAllocationRule,
+    txn_date: Date,
+    amount: &Money,
+) -> Money {
+    let mut unprocessed = amount.clone();
+    let cap = installments.len().saturating_mul(100);
+    let at = alloc.allocation_type;
+    for _ in 0..cap {
+        let (found, deducted_gt0) = match alloc.due_type {
+            DueType::PastDue | DueType::Due => {
+                let target = (0..installments.len()).rev().find(|&i| {
+                    installment_total_paid_gt0(&installments[i])
+                        && if alloc.due_type == DueType::PastDue {
+                            txn_date > installments[i].due_date()
+                        } else {
+                            txn_date == installments[i].due_date()
+                        }
+                });
+                match target {
+                    Some(idx) => {
+                        let deducted = unpay_component(&mut installments[idx], at, &unprocessed);
+                        let gt0 = deducted.is_greater_than_zero();
+                        unprocessed = unprocessed.minus(&deducted);
+                        (true, gt0)
+                    }
+                    None => (false, false),
+                }
+            }
+            DueType::InAdvance => {
+                let list = select_in_advance_installments(
+                    installments,
+                    future_rule,
+                    txn_date,
+                    installment_total_paid_gt0,
+                );
+                let n = list.len();
+                if n == 0 {
+                    (false, false)
+                } else {
+                    let n_bd = BigDecimal::from(n as i64);
+                    let even = unprocessed.divided_by(&n_bd);
+                    let adjustment = unprocessed.minus(&even.multiplied_by(&n_bd));
+                    let mut any_gt0 = false;
+                    for (j, &idx) in list.iter().enumerate() {
+                        let portion = if j == n - 1 {
+                            even.plus(&adjustment)
+                        } else {
+                            even.clone()
+                        };
+                        let deducted = unpay_component(&mut installments[idx], at, &portion);
+                        if deducted.is_greater_than_zero() {
+                            any_gt0 = true;
+                        }
+                        unprocessed = unprocessed.minus(&deducted);
+                    }
+                    (true, any_gt0)
+                }
+            }
+        };
+        if !(found && unprocessed.is_greater_than_zero() && deducted_gt0) {
+            break;
+        }
+    }
+    unprocessed
+}
+
+/// `handleRefund` (src 1374) for REFUND_FOR_ACTIVE_LOAN: when the loan has no refund-specific allocation rule
+/// (`is_default_rule`), the **reverse** of the default allocation order is used with a LAST_INSTALLMENT future rule
+/// (src 1384-1392); the refund then runs through the configured walk orientation — horizontally by due-type group,
+/// vertically by allocation type — stopping as soon as the amount is exhausted. Returns the unprocessed remainder
+/// (the transaction keeps it; there is no overpayment step on the refund path).
+#[must_use]
+pub fn handle_refund(
+    installments: &mut [AdvancedInstallment],
+    allocations: &[PaymentAllocation],
+    future_rule: FutureInstallmentAllocationRule,
+    processing_type: ScheduleProcessingType,
+    txn_date: Date,
+    amount: &Money,
+    is_default_rule: bool,
+) -> Money {
+    let (ordered, rule): (Vec<PaymentAllocation>, FutureInstallmentAllocationRule) =
+        if is_default_rule {
+            (
+                allocations.iter().rev().copied().collect(),
+                FutureInstallmentAllocationRule::LastInstallment,
+            )
+        } else {
+            (allocations.to_vec(), future_rule)
+        };
+    let mut unprocessed = amount.clone();
+    match processing_type {
+        ScheduleProcessingType::Horizontal => {
+            let mut groups: Vec<(DueType, Vec<AllocationType>)> = Vec::new();
+            for a in &ordered {
+                match groups.iter_mut().find(|(dt, _)| *dt == a.due_type) {
+                    Some(g) => g.1.push(a.allocation_type),
+                    None => groups.push((a.due_type, vec![a.allocation_type])),
+                }
+            }
+            for (due_type, types) in &groups {
+                unprocessed = refund_allocations_horizontally(
+                    installments,
+                    *due_type,
+                    types,
+                    rule,
+                    txn_date,
+                    &unprocessed,
+                );
+                if !unprocessed.is_greater_than_zero() {
+                    break;
+                }
+            }
+        }
+        ScheduleProcessingType::Vertical => {
+            for a in &ordered {
+                unprocessed = refund_vertically(installments, *a, rule, txn_date, &unprocessed);
+                if !unprocessed.is_greater_than_zero() {
+                    break;
+                }
+            }
+        }
+    }
+    unprocessed
+}
+
 /// The outcome of [`handle_re_amortization`]: the transaction's principal component (the overall overdue principal
 /// moved forward) and whether the transaction was reversed (`overdue == 0`, src 829-832).
 #[derive(Clone, Debug)]
