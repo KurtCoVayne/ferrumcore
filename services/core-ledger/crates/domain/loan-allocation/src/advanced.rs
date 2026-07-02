@@ -35,7 +35,9 @@
 //! in the separate progressive interest-schedule engine. The credited-* / `addToPrincipal` effects are modeled on a
 //! local [`AdvancedInstallment`] view (the shared `installment.rs` is intentionally not extended).
 
-use crate::charges::{ChargePaidBy, LoanChargeView, update_charges_paid_amount_by};
+use crate::charges::{
+    ChargePaidBy, LoanChargeView, undo_charges_paid_amount_by, update_charges_paid_amount_by,
+};
 use crate::installment::Installment;
 use bigdecimal::BigDecimal;
 use bigdecimal::RoundingMode;
@@ -211,6 +213,15 @@ impl AdvancedInstallment {
                 self.installment_number,
                 Some(is_penalty),
             );
+            self.charges_paid_by.extend(records);
+        }
+    }
+
+    /// Reverse a refunded fee/penalty `portion` across this row's charges (the UNPAY branch of
+    /// `chargesPaidByFunction`), recording negative `LoanChargePaidBy` entries.
+    fn distribute_charge_refund(&mut self, is_penalty: bool, portion: &Money) {
+        if portion.is_greater_than_zero() {
+            let records = undo_charges_paid_amount_by(&mut self.charges, portion, Some(is_penalty));
             self.charges_paid_by.extend(records);
         }
     }
@@ -1105,18 +1116,27 @@ pub fn handle_write_off(installments: &mut [AdvancedInstallment]) -> CreditCompo
 }
 
 /// `processPaymentAllocation(.., PaymentAction.UNPAY)`'s component leaf: reverse (refund) `min(amount, paid)` out of
-/// the component's paid bucket via the [`Installment`] `unpay_*` atoms, returning the deducted portion.
+/// the component's paid bucket via the [`Installment`] `unpay_*` atoms, returning the deducted portion. For FEE /
+/// PENALTY the reversed portion is undistributed across the row's charge entities (latest-paid-first, negative
+/// `LoanChargePaidBy` records — the UNPAY branch of `chargesPaidByFunction`).
 fn unpay_component(
     inst: &mut AdvancedInstallment,
     allocation_type: AllocationType,
     amount: &Money,
 ) -> Money {
-    let i = inst.installment_mut();
     match allocation_type {
-        AllocationType::Penalty => i.unpay_penalty(amount),
-        AllocationType::Fee => i.unpay_fee(amount),
-        AllocationType::Interest => i.unpay_interest(amount),
-        AllocationType::Principal => i.unpay_principal(amount),
+        AllocationType::Penalty => {
+            let portion = inst.installment_mut().unpay_penalty(amount);
+            inst.distribute_charge_refund(true, &portion);
+            portion
+        }
+        AllocationType::Fee => {
+            let portion = inst.installment_mut().unpay_fee(amount);
+            inst.distribute_charge_refund(false, &portion);
+            portion
+        }
+        AllocationType::Interest => inst.installment_mut().unpay_interest(amount),
+        AllocationType::Principal => inst.installment_mut().unpay_principal(amount),
     }
 }
 

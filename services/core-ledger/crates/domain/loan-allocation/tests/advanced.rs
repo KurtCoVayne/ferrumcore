@@ -1505,3 +1505,77 @@ fn walk_fee_leaf_distributes_charges() {
         "3.00"
     );
 }
+
+/// The refund walk's FEE leaf undistributes charges (latest-paid-first) symmetric to the pay leaf. Pay 12 across the
+/// three fee charges (B 5, A 3, C 4) through the horizontal walk, then refund 6 through the refund walk: C is undone
+/// first (-4), then A (-2), leaving the negative `LoanChargePaidBy` records appended after the positive ones.
+#[test]
+fn walk_fee_refund_undistributes_charges() {
+    let txn_date = date(2023, Month::March, 1);
+    let mut a = LoanChargeView::new(money("4"), Some(date(2023, Month::February, 10)), false);
+    let _ = a.update_paid_amount_by(&money("1"));
+    let b = LoanChargeView::new(money("5"), Some(date(2023, Month::January, 5)), false);
+    let c = LoanChargeView::new(money("7"), Some(date(2023, Month::February, 20)), false);
+
+    let inst = Installment::new(
+        SCALE,
+        MODE,
+        txn_date,
+        BigDecimal::from(100),
+        BigDecimal::from(0),
+        BigDecimal::from(15),
+        BigDecimal::from(0),
+    );
+    let mut installments = [AdvancedInstallment::new(inst, false)
+        .with_from_date(date(2023, Month::February, 1))
+        .with_installment_number(1)
+        .with_charges(vec![a, b, c])];
+
+    let fee = [PaymentAllocation {
+        allocation_type: AllocationType::Fee,
+        due_type: DueType::Due,
+    }];
+    let _ = process_periods_horizontally(
+        &mut installments,
+        &fee,
+        FutureInstallmentAllocationRule::NextInstallment,
+        txn_date,
+        &money("12"),
+    );
+
+    // Refund 6 of the fee through the refund walk (a DUE fee refund; the row is due on the txn date).
+    let unprocessed = handle_refund(
+        &mut installments,
+        &fee,
+        FutureInstallmentAllocationRule::NextInstallment,
+        ScheduleProcessingType::Horizontal,
+        txn_date,
+        &money("6"),
+        false,
+    );
+    assert_eq!(unprocessed.to_plain_string(), "0.00");
+
+    let records: Vec<(usize, String)> = installments[0]
+        .charges_paid_by()
+        .iter()
+        .map(|r| (r.charge, r.amount.to_plain_string()))
+        .collect();
+    assert_eq!(
+        records,
+        [
+            (1, "5.00".to_string()),
+            (0, "3.00".to_string()),
+            (2, "4.00".to_string()),
+            (2, "-4.00".to_string()),
+            (0, "-2.00".to_string()),
+        ]
+    );
+    // Net fee paid on the installment: 12 - 6 = 6.
+    assert_eq!(
+        installments[0]
+            .installment()
+            .fee_charges_outstanding()
+            .to_plain_string(),
+        "9.00"
+    );
+}
