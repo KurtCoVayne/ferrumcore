@@ -10,9 +10,11 @@ use fc_loan_allocation::advanced::{
 };
 use fc_loan_allocation::advanced::{DueType, PaymentAllocation};
 use fc_loan_allocation::emi_adapter::{
-    RestFrequencyType, calculate_is_prepay_attempt,
-    calculate_new_pay_date_in_case_of_in_advance_payment, handle_payment_allocation_progressive,
-    handle_re_age_progressive, should_recalculate_till_installment_due_date,
+    ChargeOffBehaviour, RestFrequencyType, calculate_is_prepay_attempt,
+    calculate_new_pay_date_in_case_of_in_advance_payment, charge_off_is_in_effect,
+    handle_payment_allocation_progressive, handle_re_age_progressive,
+    interest_refund_amount_with_charge_off, interest_refund_amount_without_charge_off,
+    interest_till_charge_off, should_recalculate_till_installment_due_date,
     update_installments_by_repayment_periods, update_repayment_period_balances,
 };
 use fc_loan_allocation::installment::Installment;
@@ -523,4 +525,118 @@ fn run_after_maturity_skip_branch(model: &mut fc_loan_emi::recalc::Model) {
         emi_before.to_plain_string(),
         "engine untouched by the skip branch"
     );
+}
+
+/// `chargeOffIsInEffect` (src 684) + `getInterestTillChargeOffForPeriod` (src 3631) + `handleInterestRefund`'s
+/// charge-off branch (src 641-655) — verified against the captured Java goldens (`fcCaptureInterestRefundChargeOff`,
+/// instrumented FCITCO): a past installment (100/10, due Mar 1) and an in-period one (100/12, Mar 1–Apr 1) with the
+/// charge-off on Mar 16 give 10.00 + 12.00 = 22.00 for ZERO_INTEREST (full outstanding) and 10.00 + 5.81 = 15.81 for
+/// REGULAR (12/31 days × 15 at MathContext(12, HALF_EVEN)); the refund amount is 22.00 for ZERO_INTEREST and 22.00
+/// (Σ interest charged) for REGULAR-on-progressive.
+#[test]
+fn interest_till_charge_off_matches_capture() {
+    let mar16 = d(2023, Month::March, 16);
+    let rows = [
+        installment(
+            d(2023, Month::February, 1),
+            d(2023, Month::March, 1),
+            "100",
+            "10",
+        ),
+        installment(
+            d(2023, Month::March, 1),
+            d(2023, Month::April, 1),
+            "100",
+            "12",
+        ),
+    ];
+
+    // charge_off_is_in_effect: ctx flag, earlier date, equal-date tie (stable sort → charge-off first), later date.
+    assert!(charge_off_is_in_effect(true, None, mar16));
+    assert!(charge_off_is_in_effect(
+        false,
+        Some(d(2023, Month::March, 1)),
+        mar16
+    ));
+    assert!(charge_off_is_in_effect(false, Some(mar16), mar16));
+    assert!(!charge_off_is_in_effect(
+        false,
+        Some(d(2023, Month::March, 20)),
+        mar16
+    ));
+    assert!(!charge_off_is_in_effect(false, None, mar16));
+
+    // Non-recalculation branches (FCITCO goldens).
+    let zero_interest =
+        interest_till_charge_off(None, &rows, mar16, ChargeOffBehaviour::ZeroInterest);
+    assert_eq!(zero_interest.to_plain_string(), "22.00");
+    let accelerate =
+        interest_till_charge_off(None, &rows, mar16, ChargeOffBehaviour::AccelerateMaturity);
+    assert_eq!(
+        accelerate.to_plain_string(),
+        "22.00",
+        "same branch as ZERO_INTEREST"
+    );
+    let regular = interest_till_charge_off(None, &rows, mar16, ChargeOffBehaviour::Regular);
+    assert_eq!(
+        regular.to_plain_string(),
+        "15.81",
+        "10.00 past + 5.81 prorated"
+    );
+
+    // Refund amount (FCIR goldens): ZERO_INTEREST → till-charge-off; REGULAR on progressive → Σ interest charged.
+    let refund_zero = interest_refund_amount_with_charge_off(
+        None,
+        &rows,
+        mar16,
+        ChargeOffBehaviour::ZeroInterest,
+        true,
+    );
+    assert_eq!(refund_zero.to_plain_string(), "22.00");
+    let refund_regular = interest_refund_amount_with_charge_off(
+        None,
+        &rows,
+        mar16,
+        ChargeOffBehaviour::Regular,
+        true,
+    );
+    assert_eq!(refund_regular.to_plain_string(), "22.00");
+}
+
+/// The interest-recalculation branch of `getInterestTillChargeOffForPeriod` and the non-charge-off refund formula,
+/// against golden engine values (100 @ 7% DAYS_360/30): with the charge-off on Feb 15, the past period contributes its
+/// full 0.58 and the containing period the engine's till-date 0.24 (later periods zero) → 0.82 — the same golden
+/// quantity as `get_sum_of_due_interests_on_date(Feb 15)`. The refund formula yields
+/// `2.05 (golden sum at maturity) − prior − service-computed after`, reversing at zero.
+#[test]
+fn interest_till_charge_off_recalculation_and_refund_formula() {
+    let model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let mut rows: Vec<AdvancedInstallment> = six_monthly()
+        .iter()
+        .map(|&(from, due)| installment(from, due, "0", "0"))
+        .collect();
+    update_installments_by_repayment_periods(&model, &mut rows);
+
+    let feb15 = d(2024, Month::February, 15);
+    let till = interest_till_charge_off(Some(&model), &rows, feb15, ChargeOffBehaviour::Regular);
+    assert_eq!(
+        till.to_plain_string(),
+        "0.82",
+        "0.58 past + 0.24 engine till-date"
+    );
+
+    let jul1 = d(2024, Month::July, 1);
+    let out = interest_refund_amount_without_charge_off(&model, jul1, &m("0"), &m("1.50"));
+    assert_eq!(out.amount.to_plain_string(), "0.55", "2.05 − 0 − 1.50");
+    assert!(!out.reversed);
+    let out = interest_refund_amount_without_charge_off(&model, jul1, &m("0"), &m("2.05"));
+    assert_eq!(out.amount.to_plain_string(), "0.00");
+    assert!(out.reversed);
 }

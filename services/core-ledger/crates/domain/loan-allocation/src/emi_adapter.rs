@@ -13,6 +13,7 @@ use crate::advanced::{
 };
 use crate::installment::Installment;
 use bigdecimal::BigDecimal;
+use bigdecimal::RoundingMode;
 use fc_loan_emi::recalc::Model;
 use fc_money::Money;
 use time::Date;
@@ -207,6 +208,139 @@ pub fn handle_payment_allocation_progressive(
         AllocationType::Fee | AllocationType::Penalty => {}
     }
     ProgressivePaid { paid, skip }
+}
+
+/// `LoanChargeOffBehaviour` — how interest is treated when a loan is charged off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChargeOffBehaviour {
+    /// `LoanChargeOffBehaviour.REGULAR`.
+    Regular,
+    /// `LoanChargeOffBehaviour.ZERO_INTEREST`.
+    ZeroInterest,
+    /// `LoanChargeOffBehaviour.ACCELERATE_MATURITY`.
+    AccelerateMaturity,
+}
+
+/// `chargeOffIsInEffect` (src 684): the context is already flagged charged-off, or the charge-off transaction orders
+/// before the current one. Java sorts the pair with `LoanTransactionComparator` (transaction date first) via a stable
+/// sort with the charge-off inserted first — so an equal-date tie also resolves to "in effect".
+#[must_use]
+pub fn charge_off_is_in_effect(
+    ctx_charged_off: bool,
+    charge_off_date: Option<Date>,
+    txn_date: Date,
+) -> bool {
+    ctx_charged_off || charge_off_date.is_some_and(|d| d <= txn_date)
+}
+
+/// `getInterestTillChargeOffForPeriod` (src 3631): the interest accrued up to the charge-off date, summed over the
+/// non-additional installments — past periods contribute their full charged interest minus credited interest; the
+/// period containing the charge-off date contributes the engine's recalculated interest till that date
+/// (interest-bearing + recalculation, `model: Some`), the full outstanding (ZERO_INTEREST / ACCELERATE_MATURITY), or
+/// a day-count proration of the outstanding at `MathContext(12, HALF_EVEN)` (REGULAR).
+#[must_use]
+pub fn interest_till_charge_off(
+    model: Option<&Model>,
+    installments: &[AdvancedInstallment],
+    charge_off_date: Date,
+    behaviour: ChargeOffBehaviour,
+) -> Money {
+    let zero = installments.first().map_or_else(
+        || Money::zero(2, RoundingMode::HalfEven),
+        |i| i.installment().zero(),
+    );
+    let mc = fc_loan_emi::Mc::new(12, RoundingMode::HalfEven);
+    let mut total = zero.clone();
+    for inst in installments.iter().filter(|i| !i.is_additional) {
+        let (from, due) = (inst.from_date(), inst.due_date());
+        let is_past = due <= charge_off_date;
+        let is_in_period = from <= charge_off_date && due > charge_off_date;
+        let interest = if is_past {
+            inst.installment()
+                .interest_charged()
+                .minus(inst.credited_interest())
+        } else if is_in_period {
+            match model {
+                Some(m) => m
+                    .get_period_interest_till_date(from, due, charge_off_date, true)
+                    .unwrap_or_else(|| zero.clone()),
+                None => match behaviour {
+                    ChargeOffBehaviour::ZeroInterest | ChargeOffBehaviour::AccelerateMaturity => {
+                        inst.installment().interest_outstanding()
+                    }
+                    ChargeOffBehaviour::Regular => {
+                        // totalInterest / daysInPeriod × daysTillChargeOff at MathContext(12, HALF_EVEN),
+                        // re-wrapped at the currency scale (src 3661-3666).
+                        let total_interest = inst.installment().interest_outstanding();
+                        let days_in_period = BigDecimal::from((due - from).whole_days());
+                        let days_till = BigDecimal::from((charge_off_date - from).whole_days());
+                        let prorated = mc.mul(
+                            &mc.div(total_interest.amount(), &days_in_period),
+                            &days_till,
+                        );
+                        inst.money(&prorated)
+                    }
+                },
+            }
+        } else {
+            zero.clone()
+        };
+        total = total.plus(&interest);
+    }
+    total
+}
+
+/// `handleInterestRefund`'s charge-off-in-effect branch (src 641-655): the refund amount is recomputed as the
+/// interest till the charge-off date for a progressive schedule with a non-REGULAR charge-off behaviour, else the
+/// total interest charged across the installments. (The recomputed amount is then routed through `handleRepayment` —
+/// the already-ported walk.)
+#[must_use]
+pub fn interest_refund_amount_with_charge_off(
+    model: Option<&Model>,
+    installments: &[AdvancedInstallment],
+    charge_off_date: Date,
+    behaviour: ChargeOffBehaviour,
+    is_progressive_schedule: bool,
+) -> Money {
+    if is_progressive_schedule && behaviour != ChargeOffBehaviour::Regular {
+        interest_till_charge_off(model, installments, charge_off_date, behaviour)
+    } else {
+        let zero = installments.first().map_or_else(
+            || Money::zero(2, RoundingMode::HalfEven),
+            |i| i.installment().zero(),
+        );
+        installments
+            .iter()
+            .fold(zero, |acc, i| acc.plus(&i.installment().interest_charged()))
+    }
+}
+
+/// The outcome of [`interest_refund_amount_without_charge_off`]: the recomputed refund amount and whether the
+/// zero-amount reversal fired (src 669-672).
+#[derive(Clone, Debug)]
+pub struct InterestRefundAmount {
+    pub amount: Money,
+    pub reversed: bool,
+}
+
+/// `handleInterestRefund`'s non-charge-off branch (src 657-675): the refund amount is the interest the schedule
+/// would recognize on `target_date` ([`Model::get_sum_of_due_interests_on_date`]) minus the interest refunds already
+/// granted minus the interest the loan would have accrued had the refunded transactions never happened
+/// (`InterestRefundService.totalInterestByTransactions` — an external service seam, injected here as
+/// `total_interest_by_transactions`). A zero result reverses the transaction.
+#[must_use]
+pub fn interest_refund_amount_without_charge_off(
+    model: &Model,
+    target_date: Date,
+    sum_of_prior_interest_refunds: &Money,
+    total_interest_by_transactions: &Money,
+) -> InterestRefundAmount {
+    let before = model.get_sum_of_due_interests_on_date(target_date);
+    let amount = before
+        .minus(sum_of_prior_interest_refunds)
+        .minus(total_interest_by_transactions);
+    let reversed = amount.is_zero();
+    InterestRefundAmount { amount, reversed }
 }
 
 /// The outcome of [`handle_re_age_progressive`]: the transaction's principal / interest components (the precalculated
