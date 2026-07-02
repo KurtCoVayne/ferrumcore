@@ -1359,31 +1359,59 @@ impl Model {
         if let Some(rp_idx) =
             self.change_outstanding_and_split(date, amount, &self.zero(), &self.zero())
         {
-            // calculateEMIValueAndRateFactorsForDecliningBalanceInterestMethod on the related periods.
-            let related_start = self.related_start(self.effective_due_date(rp_idx, date));
-            // applyInterestMoratoriumIfRequired (called from both the declining & flat EMI paths) before rate factors.
-            self.apply_interest_moratorium();
-            if self.interest_method == InterestMethod::Flat {
-                // calculateEMIValueAndRateFactorsForFlatInterestMethod: rate factors then the flat EMI (which updates
-                // outstanding internally); no annuity / new-model-merge / last-unpaid / cent-adjust.
-                self.calculate_rate_factor_for_periods();
-                self.calculate_emi_on_actual_model_flat(related_start);
-                return;
-            }
+            self.calculate_emi_value_and_rate_factors(rp_idx, date, was_empty);
+        }
+    }
+
+    /// `calculateEMIValueAndRateFactors` — the shared recompute tail of `addDisbursement` / `addCapitalizedIncome` /
+    /// `changeInterestRate`: rate factors + EMI over the related periods (declining annuity with the
+    /// first-vs-subsequent split and cent-adjust, or the flat EMI).
+    fn calculate_emi_value_and_rate_factors(&mut self, rp_idx: usize, date: Date, was_empty: bool) {
+        // calculateEMIValueAndRateFactorsForDecliningBalanceInterestMethod on the related periods.
+        let related_start = self.related_start(self.effective_due_date(rp_idx, date));
+        // applyInterestMoratoriumIfRequired (called from both the declining & flat EMI paths) before rate factors.
+        self.apply_interest_moratorium();
+        if self.interest_method == InterestMethod::Flat {
+            // calculateEMIValueAndRateFactorsForFlatInterestMethod: rate factors then the flat EMI (which updates
+            // outstanding internally); no annuity / new-model-merge / last-unpaid / cent-adjust.
             self.calculate_rate_factor_for_periods();
-            self.calculate_outstanding_balance();
-            if was_empty {
-                // onlyOnActualModelShouldApply (first disbursement / empty schedule).
-                self.calculate_emi_on_actual_model(related_start);
-            } else {
-                // Subsequent disbursement: recompute on a clean copy and merge the EMIs back.
-                self.calculate_emi_on_new_model_and_merge(related_start);
+            self.calculate_emi_on_actual_model_flat(related_start);
+            return;
+        }
+        self.calculate_rate_factor_for_periods();
+        self.calculate_outstanding_balance();
+        if was_empty {
+            // onlyOnActualModelShouldApply (first disbursement / empty schedule).
+            self.calculate_emi_on_actual_model(related_start);
+        } else {
+            // Subsequent operation: recompute on a clean copy and merge the EMIs back.
+            self.calculate_emi_on_new_model_and_merge(related_start);
+        }
+        self.calculate_outstanding_balance();
+        self.calculate_last_unpaid_emi();
+        if was_empty {
+            self.check_and_adjust_emi_if_needed(related_start);
+        }
+    }
+
+    /// `addCapitalizedIncome(scheduleModel, transactionDueDate, transactionAmount)` (ProgressiveEMICalculator 269):
+    /// record the capitalized income on every period starting on/after the date (`totalCapitalizedIncomeAmount`),
+    /// register the amount on the interest-period timeline (the capitalized slot of
+    /// `changeOutstandingBalanceAndUpdateInterestPeriods`, splitting at the date), and re-run the shared EMI
+    /// recompute over the related periods — the capitalized amount joins the outstanding balance like a
+    /// disbursement, without being a disbursement.
+    pub fn add_capitalized_income(&mut self, date: Date, amount: &Money) {
+        for rp in &mut self.periods {
+            if date <= rp.from {
+                rp.total_capitalized_income_amount =
+                    rp.total_capitalized_income_amount.plus(amount);
             }
-            self.calculate_outstanding_balance();
-            self.calculate_last_unpaid_emi();
-            if was_empty {
-                self.check_and_adjust_emi_if_needed(related_start);
-            }
+        }
+        let was_empty = self.is_empty();
+        if let Some(rp_idx) =
+            self.change_outstanding_and_split(date, &self.zero(), &self.zero(), amount)
+        {
+            self.calculate_emi_value_and_rate_factors(rp_idx, date, was_empty);
         }
     }
 

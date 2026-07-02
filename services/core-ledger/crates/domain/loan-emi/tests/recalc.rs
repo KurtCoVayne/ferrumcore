@@ -352,6 +352,121 @@ fn payoff_get_due_amounts_fresh() {
     assert_eq!(c.due_interest.to_plain_string(), "0.24");
 }
 
+/// `addCapitalizedIncome` (ProgressiveEMICalculator 269) — verified against a bespoke Java capture
+/// (`fcCaptureCapitalizedIncome`, JDK 21): the standard 100 @ 9.4822% DAYS_360/30 six-month model (fresh EMI 17.13),
+/// capitalized income 50 on Feb 15. Period 1 splits at Feb 15 (rate factors 0.003814678161 / 0.004087155172, the 50
+/// recorded on the Feb 1–Feb 15 interest period and joining the outstanding from Feb 15), the EMI of the related
+/// periods re-amortizes to 27.33 (tail 27.34), and every later period carries `totalCapitalizedIncomeAmount` = 50.
+#[test]
+fn capitalized_income_mid_period() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("9.4822"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let m = |s: &str| fc_money::Money::of(2, RoundingMode::HalfEven, &bd(s));
+    model.add_capitalized_income(d(2024, Month::February, 15), &m("50"));
+
+    // rp0 keeps the original schedule (the recompute starts at the related periods).
+    check_ip(
+        &model,
+        0,
+        1,
+        "17.13",
+        "0.007901833333",
+        "0.790183333301",
+        "0.79",
+        "16.34",
+        "83.66",
+    );
+    // rp1 splits at Feb 15; the capitalized 50 sits on the Feb 1–15 interest period and accrues from Feb 15.
+    assert_eq!(
+        model.periods[1].interest_periods[0]
+            .capitalized_income_principal
+            .to_plain_string(),
+        "50.00"
+    );
+    check_ip(
+        &model,
+        1,
+        0,
+        "27.33",
+        "0.003814678161",
+        "0.319135974930",
+        "0.87",
+        "26.46",
+        "107.20",
+    );
+    check_ip(
+        &model,
+        1,
+        1,
+        "27.33",
+        "0.004087155172",
+        "0.546289160290",
+        "0.87",
+        "26.46",
+        "107.20",
+    );
+    check_ip(
+        &model,
+        2,
+        0,
+        "27.33",
+        "0.007901833333",
+        "0.847076533297",
+        "0.85",
+        "26.48",
+        "80.72",
+    );
+    check_ip(
+        &model,
+        3,
+        0,
+        "27.33",
+        "0.007901833333",
+        "0.637835986641",
+        "0.64",
+        "26.69",
+        "54.03",
+    );
+    check_ip(
+        &model,
+        4,
+        0,
+        "27.33",
+        "0.007901833333",
+        "0.426936054983",
+        "0.43",
+        "26.90",
+        "27.13",
+    );
+    check_ip(
+        &model,
+        5,
+        0,
+        "27.34",
+        "0.007901833333",
+        "0.214376738324",
+        "0.21",
+        "27.13",
+        "0.00",
+    );
+    // Every period starting on/after the capitalized-income date records the running total.
+    for i in 2..6 {
+        assert_eq!(
+            model.periods[i]
+                .total_capitalized_income_amount
+                .to_plain_string(),
+            "50.00",
+            "rp{i} totalCapitalizedIncomeAmount"
+        );
+    }
+}
+
 /// `getSumOfDueInterestsOnDate` (ProgressiveEMICalculator line 2005): Σ over periods of
 /// `getDueAmounts(from, due, subjectDate).getDueInterest()`. Composed of golden-verified quantities: on the maturity
 /// date every period contributes its full dueInterest (0.58+0.49+0.39+0.29+0.20+0.10 = 2.05, the schedule goldens);
