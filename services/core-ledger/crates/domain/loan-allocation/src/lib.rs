@@ -31,6 +31,7 @@
 
 pub mod advanced;
 pub mod capitalized_income;
+pub mod charges;
 pub mod driver;
 pub mod emi_adapter;
 pub mod installment;
