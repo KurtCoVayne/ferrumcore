@@ -547,8 +547,26 @@ impl Model {
         neg_to_zero(&acc, self.scale, self.mode)
     }
 
-    /// `RepaymentPeriod.calculateCalculatedDueInterest()`.
-    fn calculated_due_interest(&self, i: usize) -> Money {
+    /// Forward-computes `(calculatedDueInterest, dueInterest)` for period `i` in one pass from period 0, threading the
+    /// previous-period unrecognized-interest carry **iteratively**. The arithmetic and evaluation order per period are
+    /// identical to the recursive getter graph (Java caches the same values via `Memo`; here the recursion is simply
+    /// unrolled), so results are bit-exact — but the cost is O(i·m) instead of the exponential fan-out the naive
+    /// recursion had (`calculatedDueInterest(i)` → `unrecognizedInterest(i-1)` → both getters of `i-1` → …).
+    fn interest_pair(&self, i: usize) -> (Money, Money) {
+        let mut carry = self.zero();
+        let mut calc = self.zero();
+        let mut due = self.zero();
+        for j in 0..=i {
+            calc = self.calculated_due_interest_with_carry(j, &carry);
+            due = self.due_interest_from_calc(j, &calc);
+            carry = neg_to_zero(&calc.minus(&due), self.scale, self.mode);
+        }
+        (calc, due)
+    }
+
+    /// `RepaymentPeriod.calculateCalculatedDueInterest()` with the previous period's unrecognized interest supplied by
+    /// the caller ([`Model::interest_pair`]'s running carry) instead of recursing.
+    fn calculated_due_interest_with_carry(&self, i: usize, prev_unrecognized: &Money) -> Money {
         let rp = &self.periods[i];
         let mut acc = self.zero();
         if !rp.is_interest_moved_upward && !rp.is_interest_moved_downward {
@@ -564,38 +582,40 @@ impl Model {
         acc = acc.plus(&rp.fixed_interest);
         acc = acc.plus(&rp.future_unrecognized_interest);
         if i > 0 {
-            acc = acc.plus(&self.unrecognized_interest(i - 1));
+            acc = acc.plus(prev_unrecognized);
         }
         neg_to_zero(&acc, self.scale, self.mode)
     }
 
-    /// `RepaymentPeriod.getCalculatedDuePrincipal()`.
-    fn calculated_due_principal(&self, i: usize) -> Money {
-        neg_to_zero(
-            &self
-                .emi_plus_credited_plus_future(i)
-                .minus(&self.calculated_due_interest(i)),
-            self.scale,
-            self.mode,
-        )
-    }
-
-    /// `RepaymentPeriod.getDueInterest()`.
-    fn due_interest(&self, i: usize) -> Money {
+    /// `RepaymentPeriod.getDueInterest()` with this period's `calculatedDueInterest` supplied by the caller (the
+    /// inline `getCalculatedDuePrincipal` comparison reuses it — same value the recursive form recomputed).
+    fn due_interest_from_calc(&self, i: usize, calc_interest: &Money) -> Money {
         let rp = &self.periods[i];
         if rp.interest_payment_grace {
             return rp.paid_interest.clone();
         }
-        let calc_interest = self.calculated_due_interest(i);
-        let primary = if rp
-            .paid_principal
-            .is_greater_than(&self.calculated_due_principal(i))
-        {
+        let calc_due_principal = neg_to_zero(
+            &self.emi_plus_credited_plus_future(i).minus(calc_interest),
+            self.scale,
+            self.mode,
+        );
+        let primary = if rp.paid_principal.is_greater_than(&calc_due_principal) {
             rp.paid_interest.clone()
         } else {
-            money_min(&calc_interest, &self.emi_plus_credited_plus_future(i))
+            money_min(calc_interest, &self.emi_plus_credited_plus_future(i))
         };
         money_max(&primary, &rp.paid_interest)
+    }
+
+    /// `RepaymentPeriod.calculateCalculatedDueInterest()`.
+    fn calculated_due_interest(&self, i: usize) -> Money {
+        self.interest_pair(i).0
+    }
+
+    /// `RepaymentPeriod.getDueInterest()`. (`getCalculatedDuePrincipal` and `getUnrecognizedInterest` no longer have
+    /// standalone forms — both are inlined into the forward pass, which is their only consumer.)
+    fn due_interest(&self, i: usize) -> Money {
+        self.interest_pair(i).1
     }
 
     /// `RepaymentPeriod.getDuePrincipal()`.
@@ -608,15 +628,6 @@ impl Model {
             self.mode,
         );
         money_max(&base, &self.periods[i].paid_principal)
-    }
-
-    /// `RepaymentPeriod.getUnrecognizedInterest()`.
-    fn unrecognized_interest(&self, i: usize) -> Money {
-        neg_to_zero(
-            &self.calculated_due_interest(i).minus(&self.due_interest(i)),
-            self.scale,
-            self.mode,
-        )
     }
 
     /// `RepaymentPeriod.getOutstandingLoanBalance()`.

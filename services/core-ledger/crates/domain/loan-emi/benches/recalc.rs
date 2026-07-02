@@ -48,13 +48,13 @@ fn fresh_model(periods: usize) -> Model {
     )
 }
 
-// ⚠️ Pre-optimization baseline (2026-07-01, release build): generate_declining_6 ≈ 10.8 ms but
-// generate_declining_12 ≈ 8.48 s — the recompute-on-every-getter cascade is EXPONENTIAL in period count (the
-// previous-period unrecognized-interest carry re-derives the whole predecessor chain per access), not merely O(n²).
-// 24-period shapes are therefore omitted until the Memo caching lands; grow these lists afterwards.
+// History: the pre-optimization baseline (2026-07-01) measured generate_declining_6 ≈ 10.8 ms and
+// generate_declining_12 ≈ 8.48 s — the recursive getter graph re-derived the whole predecessor chain per access
+// (EXPONENTIAL in period count). The iterative forward pass (`Model::interest_pair`) brought these to ≈ 517 µs and
+// ≈ 1.79 ms (−95% / −99.98%), restoring polynomial scaling; the 24-period shapes below became measurable then.
 
 fn bench_generation(c: &mut Criterion) {
-    for periods in [6usize, 12] {
+    for periods in [6usize, 12, 24] {
         c.bench_function(&format!("generate_declining_{periods}"), |b| {
             b.iter(|| black_box(fresh_model(black_box(periods))));
         });
@@ -62,42 +62,43 @@ fn bench_generation(c: &mut Criterion) {
 }
 
 fn bench_second_disbursement(c: &mut Criterion) {
-    // Single size until the Memo caching lands (see the baseline note above); grow to [6, 12, 24] afterwards.
-    let periods = 6usize;
-    let bounds = monthly_periods(periods);
-    let mid = bounds[periods / 2].0;
-    c.bench_function(&format!("second_disbursement_{periods}"), |b| {
-        b.iter_batched(
-            || fresh_model(periods),
-            |mut model| {
-                model.add_disbursement(mid, &m("500"));
-                black_box(model)
-            },
-            criterion::BatchSize::SmallInput,
-        );
-    });
+    for periods in [6usize, 24] {
+        let bounds = monthly_periods(periods);
+        let mid = bounds[periods / 2].0;
+        c.bench_function(&format!("second_disbursement_{periods}"), |b| {
+            b.iter_batched(
+                || fresh_model(periods),
+                |mut model| {
+                    model.add_disbursement(mid, &m("500"));
+                    black_box(model)
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+    }
 }
 
 fn bench_payment_loop(c: &mut Criterion) {
-    // Pay every period's scheduled principal+interest in sequence on its due date — the shape that makes the
-    // pay-all-upfront suite tests multi-minute at larger period counts. Single size until the Memo caching lands.
-    let periods = 6usize;
-    let bounds = monthly_periods(periods);
-    c.bench_function(&format!("pay_all_periods_{periods}"), |b| {
-        b.iter_batched(
-            || fresh_model(periods),
-            |mut model| {
-                for (i, &(from, due)) in bounds.iter().enumerate() {
-                    let principal = model.period_due_principal(i);
-                    let interest = model.period_due_interest(i);
-                    model.pay_principal(from, due, due, &principal);
-                    model.pay_interest(from, due, due, &interest);
-                }
-                black_box(model)
-            },
-            criterion::BatchSize::SmallInput,
-        );
-    });
+    // Pay every period's scheduled principal+interest in sequence on its due date — the shape that used to make the
+    // pay-all-upfront suite tests multi-minute at larger period counts.
+    for periods in [6usize, 24] {
+        let bounds = monthly_periods(periods);
+        c.bench_function(&format!("pay_all_periods_{periods}"), |b| {
+            b.iter_batched(
+                || fresh_model(periods),
+                |mut model| {
+                    for (i, &(from, due)) in bounds.iter().enumerate() {
+                        let principal = model.period_due_principal(i);
+                        let interest = model.period_due_interest(i);
+                        model.pay_principal(from, due, due, &principal);
+                        model.pay_interest(from, due, due, &interest);
+                    }
+                    black_box(model)
+                },
+                criterion::BatchSize::SmallInput,
+            );
+        });
+    }
 }
 
 criterion_group! {
