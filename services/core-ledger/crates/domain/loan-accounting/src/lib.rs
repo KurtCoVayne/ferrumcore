@@ -19,6 +19,7 @@
 //! activity, and the cash-basis processor. Account resolution here is by **account type** — Java resolves each type
 //! to a concrete GL account via the product's financial mapping (and merges entries landing on the same GL account);
 //! with distinct product mappings the two are identical.
+#![forbid(unsafe_code)]
 
 use fc_money::Money;
 
@@ -146,14 +147,13 @@ pub fn journal_entries_for_repayment(
     let mut total_debit = portions.principal.minus(&portions.principal); // zero at the portions' scale
     let mut account_map: Vec<(LoanAccount, Money)> = Vec::new();
     let mut immediate_credits: Vec<JournalEntry> = Vec::new();
-    let add =
-        |map: &mut Vec<(LoanAccount, Money)>, account: LoanAccount, amount: &Money| match map
-            .iter_mut()
-            .find(|(a, _)| *a == account)
-        {
-            Some((_, acc)) => *acc = acc.plus(amount),
-            None => map.push((account, amount.clone())),
-        };
+    let add = |map: &mut Vec<(LoanAccount, Money)>, account: LoanAccount, amount: &Money| match map
+        .iter_mut()
+        .find(|(a, _)| *a == account)
+    {
+        Some((_, acc)) => *acc = acc.plus(amount),
+        None => map.push((account, amount.clone())),
+    };
 
     if portions.principal.is_greater_than_zero() {
         total_debit = total_debit.plus(&portions.principal);

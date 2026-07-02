@@ -84,10 +84,17 @@ pub struct RepaymentPeriod {
     pub original_emi: Money,
     pub paid_principal: Money,
     pub paid_interest: Money,
+    /// `futureUnrecognizedInterest` — **always zero in this port**: the deferral that sets it
+    /// (`calculateUnrecognizedInterestTillDateOnScheduleModelCopyAndDefer`) was proven inert across the entire
+    /// 110-test Java suite (instrumented run: zero non-zero deferrals), so leaving it at zero is bit-exact-faithful.
+    /// The field participates in the getter graph so a future port of the deferral only has to start setting it.
     pub future_unrecognized_interest: Money,
     pub total_disbursed_amount: Money,
     pub total_capitalized_income_amount: Money,
     pub interest_payment_grace: bool,
+    /// `isInterestMovedUpward` — **never set true in this port** (its only Java writer is the inert
+    /// `futureUnrecognizedInterest` deferral above), so the `!is_interest_moved_upward` guard in the interest getters
+    /// currently has a dead true-branch. Kept for graph fidelity; see the deferral note.
     pub is_interest_moved_upward: bool,
     pub is_interest_moved_downward: bool,
     pub re_aged: bool,
@@ -106,6 +113,13 @@ pub struct PeriodDueDetails {
 }
 
 /// The interest-schedule model + the config needed to recompute rate factors.
+///
+/// Config-reachability note: `grace_on_interest`, `interest_pause_for_emi`, `allow_full_term_for_tranche`, and
+/// `number_of_repayments` are set to their inert defaults by every constructor and by no operation — they are
+/// reachable only via direct `pub`-field mutation (which the golden tests exercise). A production wiring that needs
+/// interest grace or full-term tranches must set them explicitly before the first disbursement, exactly as the
+/// goldens do. (`allow_partial_period_interest` is the one flag with a constructor path,
+/// `new_empty_same_as_repayment`; `emi_recalculation_enabled` defaults on.)
 #[derive(Clone, Debug)]
 pub struct Model {
     pub periods: Vec<RepaymentPeriod>,
@@ -2235,6 +2249,10 @@ impl Model {
             &interest_eav.value,
             installments,
         );
+        // Divergence note (deny-panic totalization): Java's `EqualAmortizationValues.add` throws a
+        // `RuntimeException` on an installment-count mismatch; here the whole EMI update would be silently skipped
+        // instead. Both value sets are built from the SAME `installments` count above, so the mismatch is
+        // unreachable by construction — Java's throw can never fire at this call site either.
         let emi_eav = match principal_eav.try_add(&interest_eav) {
             Ok(v) => v,
             Err(_) => return,
