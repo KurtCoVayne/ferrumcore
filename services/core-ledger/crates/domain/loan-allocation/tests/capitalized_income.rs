@@ -83,3 +83,22 @@ fn equal_amortization_matches_jvm_goldens() {
     );
     assert_eq!(a4.to_plain_string(), "120.00");
 }
+
+/// The buy-down-fee amortization alias resolves to the same verified function (Java duplicates the arithmetic
+/// character-for-character across `CapitalizedIncomeAmortizationUtil` / `BuyDownFeeAmortizationUtil`).
+#[test]
+fn buy_down_fee_amortization_is_the_same_function() {
+    use fc_loan_allocation::capitalized_income::calculate_buy_down_fee_amortization_till_date;
+    let jan1 = d(2024, Month::January, 1);
+    let jul1 = d(2024, Month::July, 1);
+    let out = calculate_buy_down_fee_amortization_till_date(
+        &m("120"),
+        jan1,
+        &[],
+        jul1,
+        d(2024, Month::April, 1),
+        2,
+        RoundingMode::HalfEven,
+    );
+    assert_eq!(out.to_plain_string(), "60.00");
+}

@@ -85,3 +85,11 @@ pub fn calculate_total_amortization_till_date(
         &fc_money::decimal::add(&total, &over_correction),
     )
 }
+
+/// Buy-down-fee amortization (`BuyDownFeeAmortizationUtil.calculateTotalAmortizationTillDate`,
+/// `fineract-provider/.../loanaccount/util/BuyDownFeeAmortizationUtil.java`): Java duplicates the capitalized-income
+/// EQUAL_AMORTIZATION arithmetic character-for-character (only the balance entity type differs), and the BUY_DOWN_FEE*
+/// transaction types never reach the progressive processor or the EMI engine (they fall through
+/// `processLatestTransaction`'s default warn branch — buy-down fees live at the service/accounting layer). The shared
+/// function above therefore IS the buy-down amortization; this alias documents that equivalence.
+pub use self::calculate_total_amortization_till_date as calculate_buy_down_fee_amortization_till_date;
