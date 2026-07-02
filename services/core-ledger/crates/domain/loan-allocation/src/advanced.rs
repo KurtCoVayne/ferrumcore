@@ -633,7 +633,7 @@ pub struct PaymentAllocation {
 
 /// `processPaymentAllocation` PAY action (src line 2013), reduced to the component bucket pay: route to the
 /// installment's `pay_*` atom and return the consumed portion.
-fn pay_component(
+pub(crate) fn pay_component(
     inst: &mut AdvancedInstallment,
     allocation_type: AllocationType,
     amount: &Money,

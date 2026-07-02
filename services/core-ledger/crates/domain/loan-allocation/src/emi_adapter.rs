@@ -7,7 +7,10 @@
 //! operations to it. The processor's minimal [`ScheduleModel`] view (just the maturity date) is ignored — the wrapped
 //! engine carries the real schedule state, exactly as the original `ProgressiveLoanInterestScheduleModel` does.
 
-use crate::advanced::{AdvancedInstallment, AllocationType, EmiCalculator, ScheduleModel};
+use crate::advanced::{
+    AdvancedInstallment, AllocationType, DueType, EmiCalculator, PaymentAllocation, ScheduleModel,
+    pay_component,
+};
 use fc_loan_emi::recalc::Model;
 use fc_money::Money;
 use time::Date;
@@ -119,6 +122,89 @@ pub fn update_repayment_period_balances(
         AllocationType::Fee | AllocationType::Penalty => {}
     }
     skip
+}
+
+/// The outcome of [`handle_payment_allocation_progressive`]: the paid portion plus whether the installment joined the
+/// ctx skip list (down-payment / after-maturity, or an IN_ADVANCE refresh finding nothing due).
+#[derive(Clone, Debug)]
+pub struct ProgressivePaid {
+    pub paid: Money,
+    pub skip: bool,
+}
+
+/// `handlingPaymentAllocationForInterestBearingProgressiveLoan` (src 2884) against the **real engine model** — the
+/// full-fidelity version of the seam-level `handle_payment_allocation_interest_bearing`:
+///
+/// 1. down-payment rows and installments due after the model's maturity skip the engine entirely (plain component
+///    pay + skip list, src 2892-2898);
+/// 2. IN_ADVANCE allocations first recalculate the pay date ([`calculate_new_pay_date_in_case_of_in_advance_payment`])
+///    and refresh the installment's charge from the engine ([`update_repayment_period_balances`], src 2900-2903);
+/// 3. the component is paid, and PRINCIPAL / INTEREST portions are recorded on the engine
+///    (`payPrincipal` / `payInterest` with the recalculated pay date) followed by the model→installment sync
+///    ([`update_installments_by_repayment_periods`], src 2905-2914).
+#[must_use]
+pub fn handle_payment_allocation_progressive(
+    model: &mut Model,
+    installments: &mut [AdvancedInstallment],
+    idx: usize,
+    allocation: PaymentAllocation,
+    txn_date: Date,
+    unprocessed: &Money,
+    recalculate_till_due_date: bool,
+) -> ProgressivePaid {
+    let (from, due, is_down_payment) = {
+        let inst = &installments[idx];
+        (inst.from_date(), inst.due_date(), inst.is_down_payment)
+    };
+    let maturity = model.periods.last().map(|p| p.due);
+
+    // Skip engine processing for down-payment periods or periods after the loan maturity date.
+    if is_down_payment || maturity.is_some_and(|m| due > m) {
+        return ProgressivePaid {
+            paid: pay_component(
+                &mut installments[idx],
+                allocation.allocation_type,
+                unprocessed,
+            ),
+            skip: true,
+        };
+    }
+
+    let mut pay_date = txn_date;
+    let mut skip = false;
+    if allocation.due_type == DueType::InAdvance {
+        pay_date = calculate_new_pay_date_in_case_of_in_advance_payment(
+            txn_date,
+            from,
+            due,
+            recalculate_till_due_date,
+        );
+        skip = update_repayment_period_balances(
+            model,
+            &mut installments[idx],
+            allocation.allocation_type,
+            pay_date,
+        );
+    }
+
+    let paid = pay_component(
+        &mut installments[idx],
+        allocation.allocation_type,
+        unprocessed,
+    );
+
+    match allocation.allocation_type {
+        AllocationType::Principal => {
+            model.pay_principal(from, due, pay_date, &paid);
+            update_installments_by_repayment_periods(model, installments);
+        }
+        AllocationType::Interest => {
+            model.pay_interest(from, due, pay_date, &paid);
+            update_installments_by_repayment_periods(model, installments);
+        }
+        AllocationType::Fee | AllocationType::Penalty => {}
+    }
+    ProgressivePaid { paid, skip }
 }
 
 /// The production [`EmiCalculator`] backed by the `fc-loan-emi` engine. Construct it from a fully-built

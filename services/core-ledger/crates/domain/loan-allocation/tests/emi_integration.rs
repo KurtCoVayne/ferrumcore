@@ -8,9 +8,10 @@ use fc_loan_allocation::ProgressiveEmiCalculator;
 use fc_loan_allocation::advanced::{
     AdvancedInstallment, AllocationType, EmiCalculator, ScheduleModel,
 };
+use fc_loan_allocation::advanced::{DueType, PaymentAllocation};
 use fc_loan_allocation::emi_adapter::{
     RestFrequencyType, calculate_is_prepay_attempt,
-    calculate_new_pay_date_in_case_of_in_advance_payment,
+    calculate_new_pay_date_in_case_of_in_advance_payment, handle_payment_allocation_progressive,
     should_recalculate_till_installment_due_date, update_installments_by_repayment_periods,
     update_repayment_period_balances,
 };
@@ -311,4 +312,131 @@ fn pay_date_and_prepay_helpers() {
     // Outstanding till the first due date = 100.00 + 0.58 (only period 0's golden interest has accrued).
     assert!(calculate_is_prepay_attempt(&model, feb1, &m("100.58")));
     assert!(!calculate_is_prepay_attempt(&model, feb1, &m("100.57")));
+}
+
+/// `handlingPaymentAllocationForInterestBearingProgressiveLoan` (src 2884) against the real engine, replaying the
+/// `test_payoff_on0215_*` stage-2 golden as two IN_ADVANCE allocations on Feb 15 (period 1, Feb 1–Mar 1):
+/// the balance refresh writes the golden mid-period due amounts (16.77 / 0.24) onto the installment, the engine
+/// records `payPrincipal`/`payInterest` at the Feb 15 pay date (the exact golden calls), and the model→installment
+/// sync propagates the golden cascaded schedule (period 2 → 16.42 / 0.59, period 3 → 16.72 / 0.29). Also covers the
+/// after-maturity skip branch (plain component pay, engine untouched).
+#[test]
+fn progressive_payment_allocation_replays_payoff_golden() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let feb15 = d(2024, Month::February, 15);
+
+    // Installments mirroring the schedule rows, synced to the fresh engine values.
+    let mut installments: Vec<AdvancedInstallment> = six_monthly()
+        .iter()
+        .map(|&(from, due)| installment(from, due, "0", "0"))
+        .collect();
+    update_installments_by_repayment_periods(&model, &mut installments);
+
+    // IN_ADVANCE principal on Feb 15 against period 1 — no recalculation config → pay date stays Feb 15.
+    let out = handle_payment_allocation_progressive(
+        &mut model,
+        &mut installments,
+        1,
+        PaymentAllocation {
+            allocation_type: AllocationType::Principal,
+            due_type: DueType::InAdvance,
+        },
+        feb15,
+        &m("16.77"),
+        false,
+    );
+    assert!(!out.skip);
+    assert_eq!(out.paid.to_plain_string(), "16.77");
+
+    // IN_ADVANCE interest for the prorated 0.24.
+    let out = handle_payment_allocation_progressive(
+        &mut model,
+        &mut installments,
+        1,
+        PaymentAllocation {
+            allocation_type: AllocationType::Interest,
+            due_type: DueType::InAdvance,
+        },
+        feb15,
+        &m("0.24"),
+        false,
+    );
+    assert!(!out.skip);
+    assert_eq!(out.paid.to_plain_string(), "0.24");
+
+    // The engine reproduced the payoff stage-2 golden: period 1 fully paid at 16.77/0.24, the cascade re-priced
+    // period 2 to 16.42/0.59 and period 3 to 16.72/0.29 — and the sync wrote those values onto the installments.
+    assert!(model.period_fully_paid(1));
+    let expect = [
+        (1usize, "16.77", "0.24"),
+        (2, "16.42", "0.59"),
+        (3, "16.72", "0.29"),
+    ];
+    for (i, principal, interest) in expect {
+        assert_eq!(
+            model.period_due_principal(i).to_plain_string(),
+            principal,
+            "engine period {i} principal"
+        );
+        let inst = installments[i].installment();
+        assert_eq!(
+            inst.principal().to_plain_string(),
+            principal,
+            "row {i} principal"
+        );
+        assert_eq!(
+            inst.interest_charged().to_plain_string(),
+            interest,
+            "row {i} interest"
+        );
+    }
+    assert_eq!(
+        installments[1]
+            .installment()
+            .principal_outstanding()
+            .to_plain_string(),
+        "0.00"
+    );
+
+    // After-maturity skip branch: an installment due past the model maturity pays the component only.
+    let emi_before = model.period_emi(4);
+    let mut extra = vec![installment(
+        d(2024, Month::July, 1),
+        d(2024, Month::August, 1),
+        "50",
+        "0",
+    )];
+    let out = handle_payment_allocation_progressive(
+        &mut model,
+        &mut extra,
+        0,
+        PaymentAllocation {
+            allocation_type: AllocationType::Principal,
+            due_type: DueType::Due,
+        },
+        d(2024, Month::August, 1),
+        &m("20"),
+        false,
+    );
+    assert!(out.skip);
+    assert_eq!(out.paid.to_plain_string(), "20.00");
+    assert_eq!(
+        extra[0]
+            .installment()
+            .principal_completed()
+            .to_plain_string(),
+        "20.00"
+    );
+    assert_eq!(
+        model.period_emi(4).to_plain_string(),
+        emi_before.to_plain_string(),
+        "engine untouched by the skip branch"
+    );
 }
