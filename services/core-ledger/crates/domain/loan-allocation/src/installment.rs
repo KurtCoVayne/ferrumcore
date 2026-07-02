@@ -161,6 +161,23 @@ impl Installment {
         self.money(&self.interest_charged)
     }
 
+    /// The paid interest (Java `getInterestPaid`).
+    #[must_use]
+    pub fn interest_paid(&self) -> Money {
+        self.money(&self.interest_paid)
+    }
+
+    /// Raw-set the completed principal (Java `setPrincipalCompleted` — the re-age rebuild stamps paid amounts
+    /// directly, bypassing the pay atoms' outstanding cap).
+    pub fn set_principal_completed(&mut self, amount: &Money) {
+        self.principal_completed = amount.amount().clone();
+    }
+
+    /// Raw-set the paid interest (Java `setInterestPaid`).
+    pub fn set_interest_paid(&mut self, amount: &Money) {
+        self.interest_paid = amount.amount().clone();
+    }
+
     /// Replace the charged interest (Java `updateInterestCharged`) — the model→installment sync overwrites the
     /// interest charge with the engine's recalculated due interest.
     pub fn update_interest_charged(&mut self, interest: &Money) {

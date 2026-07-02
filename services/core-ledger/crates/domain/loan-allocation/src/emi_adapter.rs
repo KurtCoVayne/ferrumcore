@@ -11,6 +11,8 @@ use crate::advanced::{
     AdvancedInstallment, AllocationType, DueType, EmiCalculator, PaymentAllocation, ScheduleModel,
     pay_component,
 };
+use crate::installment::Installment;
+use bigdecimal::BigDecimal;
 use fc_loan_emi::recalc::Model;
 use fc_money::Money;
 use time::Date;
@@ -205,6 +207,150 @@ pub fn handle_payment_allocation_progressive(
         AllocationType::Fee | AllocationType::Penalty => {}
     }
     ProgressivePaid { paid, skip }
+}
+
+/// The outcome of [`handle_re_age_progressive`]: the transaction's principal / interest components (the precalculated
+/// re-age outstanding) and whether the zero-amount reversal fired.
+#[derive(Clone, Debug)]
+pub struct ReAgeOutcome {
+    pub principal: Money,
+    pub interest: Money,
+    pub reversed: bool,
+}
+
+/// `handleReAgeEqualAmortizationEMICalculator` (src 3806) for the fee-/penalty-/accrual-free core: re-age an
+/// interest-recalculation loan through the real engine and rebuild the installment list from the re-aged model.
+///
+/// 1. `precalculateReAgeEqualAmortizationAmount` (ProgressiveEMICalculator 2070) =
+///    `getOutstandingAmountsTillDate(PAYABLE ? txnDate : maturityDate)` → the transaction's principal/interest
+///    components; a zero total reverses the transaction (src 3825-3827).
+/// 2. the engine's `reAgeEqualAmortization` (already ported as
+///    [`fc_loan_emi::recalc::Model::re_age_equal_amortization`]; the fee/penalty split arguments are zero here).
+/// 3. the installment rebuild (src 3853-3913): drop the normal rows the re-age replaces (due on/after the
+///    transaction) and additional rows absorbed inside the new maturity; re-anchor surviving additional rows at the
+///    new maturity; for every model period either update the matching past row (charge := paid, so the row closes at
+///    what was actually collected) or create a re-aged row carrying the engine's due principal / interest (the
+///    early-repayment holder also carries its paid amounts); drop past rows no period claims; then
+///    `reprocessInstallments` (src 3520) — sort by (from, due) and stitch each row's from-date to its predecessor's
+///    due date.
+#[must_use]
+pub fn handle_re_age_progressive(
+    model: &mut Model,
+    installments: &mut Vec<AdvancedInstallment>,
+    txn_date: Date,
+    re_age_start_date: Date,
+    number_of_installments: usize,
+    frequency_months: i64,
+    full_interest: bool,
+) -> ReAgeOutcome {
+    // 1. precalculate the re-age amounts (the transaction components).
+    let target = if full_interest {
+        model.periods.last().map_or(txn_date, |p| p.due)
+    } else {
+        txn_date
+    };
+    let (principal, interest) = model.get_outstanding_amounts_till_date(target);
+    let reversed = principal.plus(&interest).is_zero();
+
+    // 2. re-age the engine model.
+    model.re_age_equal_amortization(
+        txn_date,
+        re_age_start_date,
+        number_of_installments,
+        frequency_months,
+        full_interest,
+    );
+    let new_maturity = model.periods.last().map(|p| p.due);
+
+    // 3a. drop replaced normal rows / absorbed additional rows; re-anchor surviving additional rows.
+    installments.retain(|i| {
+        let replaced_normal = !i.is_down_payment && !i.is_additional && i.due_date() >= txn_date;
+        let absorbed_additional =
+            i.is_additional && new_maturity.is_some_and(|m| i.due_date() <= m);
+        !(replaced_normal || absorbed_additional)
+    });
+    if let Some(m) = new_maturity {
+        for inst in installments.iter_mut().filter(|i| i.is_additional) {
+            inst.set_from_date(m);
+        }
+    }
+
+    // 3b. walk the re-aged model: update matched past rows, create re-aged rows for the rest.
+    let mut matched = vec![false; installments.len()];
+    let mut created: Vec<AdvancedInstallment> = Vec::new();
+    for idx in 0..model.periods.len() {
+        let (from, due) = (model.periods[idx].from, model.periods[idx].due);
+        if due < txn_date {
+            if let Some(pos) = installments
+                .iter()
+                .position(|i| i.due_date() == due && i.from_date() == from)
+            {
+                let completed = installments[pos].installment().principal_completed();
+                let paid_interest = installments[pos].installment().interest_paid();
+                installments[pos]
+                    .installment_mut()
+                    .update_principal(&completed);
+                installments[pos]
+                    .installment_mut()
+                    .update_interest_charged(&paid_interest);
+                installments[pos].set_credited_principal(&model.period_credited_principal(idx));
+                matched[pos] = true;
+            }
+        } else {
+            let mut row = AdvancedInstallment::new(
+                Installment::new(
+                    model.scale,
+                    model.mode,
+                    due,
+                    model.period_due_principal(idx).amount().clone(),
+                    model.period_due_interest(idx).amount().clone(),
+                    BigDecimal::from(0),
+                    BigDecimal::from(0),
+                ),
+                false,
+            )
+            .with_from_date(from);
+            row.is_re_aged = true;
+            if model.periods[idx].re_aged_early_repayment_holder {
+                row.installment_mut()
+                    .set_principal_completed(&model.periods[idx].paid_principal);
+                row.installment_mut()
+                    .set_interest_paid(&model.periods[idx].paid_interest);
+            }
+            row.set_credited_principal(&model.period_credited_principal(idx));
+            created.push(row);
+        }
+    }
+
+    // 3c. drop past normal rows no model period claimed, append the created rows, and reprocess.
+    let mut keep = matched.into_iter();
+    installments.retain(|i| {
+        let m = keep.next().unwrap_or(true);
+        i.is_additional || i.is_down_payment || m
+    });
+    installments.append(&mut created);
+    reprocess_installments(installments);
+
+    ReAgeOutcome {
+        principal,
+        interest,
+        reversed,
+    }
+}
+
+/// `reprocessInstallments` (src 3520): order by (from, due) and stitch each non-down-payment row's from-date to the
+/// previous row's due date when discontinuous. (Installment numbers are positional here.)
+fn reprocess_installments(installments: &mut [AdvancedInstallment]) {
+    installments.sort_by_key(|i| (i.from_date(), i.due_date()));
+    let mut previous_due: Option<Date> = None;
+    for inst in installments.iter_mut() {
+        if let Some(prev) = previous_due {
+            if inst.from_date() != prev && !inst.is_down_payment {
+                inst.set_from_date(prev);
+            }
+        }
+        previous_due = Some(inst.due_date());
+    }
 }
 
 /// The production [`EmiCalculator`] backed by the `fc-loan-emi` engine. Construct it from a fully-built

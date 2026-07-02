@@ -12,11 +12,11 @@ use fc_loan_allocation::advanced::{DueType, PaymentAllocation};
 use fc_loan_allocation::emi_adapter::{
     RestFrequencyType, calculate_is_prepay_attempt,
     calculate_new_pay_date_in_case_of_in_advance_payment, handle_payment_allocation_progressive,
-    should_recalculate_till_installment_due_date, update_installments_by_repayment_periods,
-    update_repayment_period_balances,
+    handle_re_age_progressive, should_recalculate_till_installment_due_date,
+    update_installments_by_repayment_periods, update_repayment_period_balances,
 };
 use fc_loan_allocation::installment::Installment;
-use fc_loan_emi::recalc::new_declining_balance;
+use fc_loan_emi::recalc::{DayCount, new_declining_balance, new_declining_balance_with_day_count};
 use fc_money::Money;
 use std::str::FromStr;
 use time::{Date, Month};
@@ -405,6 +405,90 @@ fn progressive_payment_allocation_replays_payoff_golden() {
         "0.00"
     );
 
+    run_after_maturity_skip_branch(&mut model);
+}
+
+/// `handleReAgeEqualAmortizationEMICalculator` (src 3806) core, replaying the FULL_INTEREST re-age golden
+/// (`reage_equal_amortization_preserves_outstanding`: 100 @ 15.678% DAYS_365, re-age Apr 15 → 6 monthly installments
+/// from Apr 20; precalculated outstanding = 100.00 / 4.62): the transaction components carry the golden precalculated
+/// amounts, past rows close at their paid amounts, the re-aged rows carry the engine's schedule, and the
+/// outstanding-preservation invariant (Σ outstanding = 100.00 / 4.62) survives the rebuild.
+#[test]
+fn progressive_re_age_replays_engine_golden() {
+    let mut model = new_declining_balance_with_day_count(
+        &six_monthly(),
+        &bd("100"),
+        &bd("15.678"),
+        DayCount::ActualFixedYear { days_in_year: 365 },
+        2,
+        RoundingMode::HalfEven,
+    );
+    let mut installments: Vec<AdvancedInstallment> = six_monthly()
+        .iter()
+        .map(|&(from, due)| installment(from, due, "0", "0"))
+        .collect();
+    update_installments_by_repayment_periods(&model, &mut installments);
+
+    let apr15 = d(2024, Month::April, 15);
+    let out = handle_re_age_progressive(
+        &mut model,
+        &mut installments,
+        apr15,
+        d(2024, Month::April, 20),
+        6,
+        1,
+        true, // FULL_INTEREST
+    );
+
+    // The golden precalculated re-age amounts stamp the transaction.
+    assert_eq!(out.principal.to_plain_string(), "100.00");
+    assert_eq!(out.interest.to_plain_string(), "4.62");
+    assert!(!out.reversed);
+
+    // Structure: every re-aged model period materialized a row; past rows closed at their (zero) paid amounts.
+    let re_aged_periods = model.periods.iter().filter(|p| p.due >= apr15).count();
+    let re_aged_rows = installments.iter().filter(|i| i.is_re_aged).count();
+    assert_eq!(re_aged_rows, re_aged_periods, "one row per re-aged period");
+    for inst in installments.iter().filter(|i| !i.is_re_aged) {
+        assert!(inst.due_date() < apr15, "only past rows survive un-re-aged");
+        assert_eq!(
+            inst.installment().principal().to_plain_string(),
+            "0.00",
+            "past row closes at its paid principal"
+        );
+        assert_eq!(
+            inst.installment().interest_charged().to_plain_string(),
+            "0.00",
+            "past row closes at its paid interest"
+        );
+    }
+
+    // The outstanding-preservation invariant threads through the rebuilt schedule.
+    let zero = m("0");
+    let (outstanding_principal, outstanding_interest) =
+        installments
+            .iter()
+            .fold((zero.clone(), zero), |(p, i), inst| {
+                (
+                    p.plus(&inst.installment().principal_outstanding()),
+                    i.plus(&inst.installment().interest_outstanding()),
+                )
+            });
+    assert_eq!(outstanding_principal.to_plain_string(), "100.00");
+    assert_eq!(outstanding_interest.to_plain_string(), "4.62");
+
+    // reprocessInstallments left the rows ordered and stitched (each from == previous due).
+    for w in installments.windows(2) {
+        assert!(w[0].due_date() <= w[1].due_date(), "ordered by due date");
+        assert_eq!(
+            w[1].from_date(),
+            w[0].due_date(),
+            "from stitched to previous due"
+        );
+    }
+}
+
+fn run_after_maturity_skip_branch(model: &mut fc_loan_emi::recalc::Model) {
     // After-maturity skip branch: an installment due past the model maturity pays the component only.
     let emi_before = model.period_emi(4);
     let mut extra = vec![installment(
@@ -414,7 +498,7 @@ fn progressive_payment_allocation_replays_payoff_golden() {
         "0",
     )];
     let out = handle_payment_allocation_progressive(
-        &mut model,
+        model,
         &mut extra,
         0,
         PaymentAllocation {

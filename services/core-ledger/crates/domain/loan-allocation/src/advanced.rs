@@ -163,6 +163,11 @@ impl AdvancedInstallment {
         self
     }
 
+    /// `setFromDate` — mutate the period start in place (the re-age rebuild re-anchors surviving additional rows).
+    pub fn set_from_date(&mut self, from_date: Date) {
+        self.from_date = from_date;
+    }
+
     /// `getFromDate()`.
     #[must_use]
     pub fn from_date(&self) -> Date {
