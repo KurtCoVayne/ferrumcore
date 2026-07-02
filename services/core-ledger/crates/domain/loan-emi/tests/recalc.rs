@@ -352,6 +352,35 @@ fn payoff_get_due_amounts_fresh() {
     assert_eq!(c.due_interest.to_plain_string(), "0.24");
 }
 
+/// `getSumOfDueInterestsOnDate` (ProgressiveEMICalculator line 2005): Σ over periods of
+/// `getDueAmounts(from, due, subjectDate).getDueInterest()`. Composed of golden-verified quantities: on the maturity
+/// date every period contributes its full dueInterest (0.58+0.49+0.39+0.29+0.20+0.10 = 2.05, the schedule goldens);
+/// on Feb 15 only period 0 (full 0.58) and period 1 (prorated 0.24, the payoff getDueAmounts golden) accrue while
+/// later periods clip to zero (the fully-repay golden) → 0.82.
+#[test]
+fn sum_of_due_interests_on_date() {
+    let model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("7.0"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    assert_eq!(
+        model
+            .get_sum_of_due_interests_on_date(d(2024, Month::July, 1))
+            .to_plain_string(),
+        "2.05"
+    );
+    assert_eq!(
+        model
+            .get_sum_of_due_interests_on_date(d(2024, Month::February, 15))
+            .to_plain_string(),
+        "0.82"
+    );
+}
+
 /// `test_fullyRepay_on0215_*`: full early payoff of every period on Feb 15 (a second, independent stateful golden that
 /// exercises the early-payoff EMI override — paying future periods before their start date marks them fully paid).
 #[test]

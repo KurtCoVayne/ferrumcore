@@ -1073,6 +1073,32 @@ impl Model {
     pub fn ip_calc_due_interest(&self, i: usize, k: usize) -> BigDecimal {
         self.ip_calculated_due_interest(i, k)
     }
+    /// `RepaymentPeriod.getCreditedPrincipal()` — the chargeback-credited principal recorded on the period's interest
+    /// periods (read by the processor's `updateInstallmentsByRepaymentPeriods` model→installment sync).
+    #[must_use]
+    pub fn period_credited_principal(&self, i: usize) -> Money {
+        self.credited_principal(i)
+    }
+    /// `RepaymentPeriod.getCreditedInterest()`.
+    #[must_use]
+    pub fn period_credited_interest(&self, i: usize) -> Money {
+        self.credited_interest(i)
+    }
+
+    /// `getSumOfDueInterestsOnDate(scheduleModel, subjectDate)` (ProgressiveEMICalculator line 2005): the sum over
+    /// every repayment period of `getDueAmounts(from, due, subjectDate).getDueInterest()` — the total interest that
+    /// would be due were the loan settled on `subject_date`. (The per-period from/due always locate their own period,
+    /// so the lookup cannot miss; a missing period contributes zero, mirroring the impossible-`null` case.)
+    #[must_use]
+    pub fn get_sum_of_due_interests_on_date(&self, subject_date: Date) -> Money {
+        let bounds: Vec<(Date, Date)> = self.periods.iter().map(|rp| (rp.from, rp.due)).collect();
+        bounds.iter().fold(self.zero(), |acc, &(from, due)| {
+            match self.get_due_amounts(from, due, subject_date) {
+                Some(details) => acc.plus(&details.due_interest),
+                None => acc,
+            }
+        })
+    }
 
     // --- mutating operations ---
 

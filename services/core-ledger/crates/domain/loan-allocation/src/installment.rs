@@ -155,6 +155,18 @@ impl Installment {
         self.principal = self.money(&self.principal).plus(amount).amount().clone();
     }
 
+    /// The charged interest (Java `getInterestCharged`).
+    #[must_use]
+    pub fn interest_charged(&self) -> Money {
+        self.money(&self.interest_charged)
+    }
+
+    /// Replace the charged interest (Java `updateInterestCharged`) — the model→installment sync overwrites the
+    /// interest charge with the engine's recalculated due interest.
+    pub fn update_interest_charged(&mut self, interest: &Money) {
+        self.interest_charged = interest.amount().clone();
+    }
+
     // ----- PAY (into the paid bucket) -------------------------------------------------------------------------------
 
     fn consume(amount: &Money, due: &Money) -> Money {

@@ -219,6 +219,16 @@ impl AdvancedInstallment {
     pub fn added_principal(&self) -> &Money {
         &self.added_principal
     }
+
+    /// `setCreditedPrincipal` — the model→installment sync overwrites (not accumulates) the credited principal with
+    /// the engine's value.
+    pub fn set_credited_principal(&mut self, amount: &Money) {
+        self.credited_principal = amount.clone();
+    }
+    /// `setCreditedInterest`.
+    pub fn set_credited_interest(&mut self, amount: &Money) {
+        self.credited_interest = amount.clone();
+    }
 }
 
 /// `calculateChargebackAllocationMap` (src line 1345): walk `allocation_types` in order, assigning to each component
