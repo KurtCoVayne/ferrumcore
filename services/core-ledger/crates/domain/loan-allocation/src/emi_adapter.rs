@@ -210,6 +210,46 @@ pub fn handle_payment_allocation_progressive(
     ProgressivePaid { paid, skip }
 }
 
+/// `handleCapitalizedIncomeWithEMICalculator` (src 1753) for the charge-/tranche-free core: register the capitalized
+/// income on the engine ([`Model::add_capitalized_income`]) and refresh the installments from the re-amortized model —
+/// `recalculateRepaymentPeriodsWithEMICalculation` (src 1787) pairs the model periods with the non-additional /
+/// non-down-payment rows positionally and overwrites the charged principal / interest of every row whose due date
+/// matches its period and falls on/after the transaction date (rows already due stay as billed). The post-maturity
+/// additional-installment adjustment and full-term-tranche row creation are the tranche/charge dimension, out of
+/// scope at this seam; `allocateOverpayment` runs at the transaction layer.
+pub fn handle_capitalized_income_progressive(
+    model: &mut Model,
+    installments: &mut [AdvancedInstallment],
+    txn_date: Date,
+    amount: &Money,
+) {
+    model.add_capitalized_income(txn_date, amount);
+    if !amount.is_greater_than_zero() {
+        return;
+    }
+    let mut row = 0usize;
+    for i in 0..model.periods.len() {
+        while row < installments.len()
+            && (installments[row].is_additional || installments[row].is_down_payment)
+        {
+            row += 1;
+        }
+        if row >= installments.len() {
+            break;
+        }
+        let due = model.periods[i].due;
+        if installments[row].due_date() == due && due >= txn_date {
+            installments[row]
+                .installment_mut()
+                .update_principal(&model.period_due_principal(i));
+            installments[row]
+                .installment_mut()
+                .update_interest_charged(&model.period_due_interest(i));
+        }
+        row += 1;
+    }
+}
+
 /// `LoanChargeOffBehaviour` — how interest is treated when a loan is charged off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChargeOffBehaviour {

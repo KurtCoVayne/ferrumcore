@@ -12,7 +12,8 @@ use fc_loan_allocation::advanced::{DueType, PaymentAllocation};
 use fc_loan_allocation::emi_adapter::{
     ChargeOffBehaviour, RestFrequencyType, calculate_is_prepay_attempt,
     calculate_new_pay_date_in_case_of_in_advance_payment, charge_off_is_in_effect,
-    handle_contract_termination, handle_payment_allocation_progressive, handle_re_age_progressive,
+    handle_capitalized_income_progressive, handle_contract_termination,
+    handle_payment_allocation_progressive, handle_re_age_progressive,
     interest_refund_amount_with_charge_off, interest_refund_amount_without_charge_off,
     interest_till_charge_off, should_recalculate_till_installment_due_date,
     update_installments_by_repayment_periods, update_repayment_period_balances,
@@ -703,4 +704,63 @@ fn contract_termination_matches_capture() {
     assert!(out.reversed);
     assert!(!out.contract_terminated);
     assert_eq!(out.principal.to_plain_string(), "0.00");
+}
+
+/// `handleCapitalizedIncomeWithEMICalculator` (src 1753) core, replaying the `fcCaptureCapitalizedIncome` engine
+/// golden through the processor: 100 @ 9.4822% (fresh EMI-17.13 schedule synced onto rows), capitalized income 50 on
+/// Feb 15. The engine re-amortizes to the 27.33 schedule, and the positional refresh overwrites the rows due on/after
+/// the transaction date (26.46/0.87 … 27.13/0.21) while the already-due first row keeps its billed 16.34/0.79.
+#[test]
+fn progressive_capitalized_income_refreshes_future_rows() {
+    let mut model = new_declining_balance(
+        &six_monthly(),
+        &bd("100"),
+        &bd("9.4822"),
+        1,
+        2,
+        RoundingMode::HalfEven,
+    );
+    let mut rows: Vec<AdvancedInstallment> = six_monthly()
+        .iter()
+        .map(|&(from, due)| installment(from, due, "0", "0"))
+        .collect();
+    update_installments_by_repayment_periods(&model, &mut rows);
+    assert_eq!(rows[0].installment().principal().to_plain_string(), "16.34");
+
+    handle_capitalized_income_progressive(
+        &mut model,
+        &mut rows,
+        d(2024, Month::February, 15),
+        &m("50"),
+    );
+
+    // The already-due first row keeps its billed amounts.
+    assert_eq!(rows[0].installment().principal().to_plain_string(), "16.34");
+    assert_eq!(
+        rows[0].installment().interest_charged().to_plain_string(),
+        "0.79"
+    );
+    // The rows due on/after Feb 15 carry the re-amortized engine schedule (the FCCI golden).
+    let expected = [
+        ("26.46", "0.87"),
+        ("26.48", "0.85"),
+        ("26.69", "0.64"),
+        ("26.90", "0.43"),
+        ("27.13", "0.21"),
+    ];
+    for (j, (principal, interest)) in expected.iter().enumerate() {
+        let inst = rows[j + 1].installment();
+        assert_eq!(
+            inst.principal().to_plain_string(),
+            *principal,
+            "row {} principal",
+            j + 1
+        );
+        assert_eq!(
+            inst.interest_charged().to_plain_string(),
+            *interest,
+            "row {} interest",
+            j + 1
+        );
+    }
 }
