@@ -30,6 +30,7 @@
 #![forbid(unsafe_code)]
 
 pub mod advanced;
+pub mod capitalized_income;
 pub mod driver;
 pub mod emi_adapter;
 pub mod installment;
