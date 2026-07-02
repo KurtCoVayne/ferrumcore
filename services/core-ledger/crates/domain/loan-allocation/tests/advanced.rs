@@ -22,6 +22,7 @@ use fc_loan_allocation::advanced::{
     handle_re_amortization, handle_refund, handle_write_off, process_credit_transaction,
     process_periods_horizontally, process_periods_vertically, process_repayment, route_transaction,
 };
+use fc_loan_allocation::charges::LoanChargeView;
 use fc_money::Money;
 use time::{Date, Month};
 
@@ -1429,4 +1430,78 @@ fn charge_off_matches_capture() {
     assert_eq!(out.components.principal.to_plain_string(), "0.00");
     assert!(out.reversed);
     assert!(!out.charged_off);
+}
+
+/// The FEE leaf's charge distribution wired through the horizontal walk — replays the captured Java golden
+/// (`fcCaptureChargeDistribution`): one installment due on the txn date carrying fee 15 backed by three fee charges
+/// A (due Feb 10, 4 with 1 pre-paid), B (due Jan 5, 5), C (due Feb 20, 7); a 12 payment allocated `[DUE_FEE]`
+/// distributes earliest-due-first B 5 → A 3 → C 4, with matching `LoanChargePaidBy` records stamped with the
+/// installment number.
+#[test]
+fn walk_fee_leaf_distributes_charges() {
+    let txn_date = date(2023, Month::March, 1);
+    let mut a = LoanChargeView::new(money("4"), Some(date(2023, Month::February, 10)), false);
+    let _ = a.update_paid_amount_by(&money("1"));
+    let b = LoanChargeView::new(money("5"), Some(date(2023, Month::January, 5)), false);
+    let c = LoanChargeView::new(money("7"), Some(date(2023, Month::February, 20)), false);
+
+    let inst = Installment::new(
+        SCALE,
+        MODE,
+        txn_date,
+        BigDecimal::from(100),
+        BigDecimal::from(0),
+        BigDecimal::from(15),
+        BigDecimal::from(0),
+    );
+    let mut installments = [AdvancedInstallment::new(inst, false)
+        .with_from_date(date(2023, Month::February, 1))
+        .with_installment_number(1)
+        .with_charges(vec![a, b, c])];
+
+    let overpayment = process_periods_horizontally(
+        &mut installments,
+        &[PaymentAllocation {
+            allocation_type: AllocationType::Fee,
+            due_type: DueType::Due,
+        }],
+        FutureInstallmentAllocationRule::NextInstallment,
+        txn_date,
+        &money("12"),
+    );
+
+    assert_eq!(overpayment.to_plain_string(), "0.00");
+    assert_eq!(
+        installments[0]
+            .installment()
+            .fee_charges_outstanding()
+            .to_plain_string(),
+        "3.00"
+    );
+    let records: Vec<(usize, String, Option<u32>)> = installments[0]
+        .charges_paid_by()
+        .iter()
+        .map(|r| (r.charge, r.amount.to_plain_string(), r.installment_number))
+        .collect();
+    assert_eq!(
+        records,
+        [
+            (1, "5.00".to_string(), Some(1)),
+            (0, "3.00".to_string(), Some(1)),
+            (2, "4.00".to_string(), Some(1)),
+        ]
+    );
+    // The charge entities' outstanding reflect the distribution (B/A fully paid, C 3 remaining).
+    assert_eq!(
+        installments[0].charges()[1]
+            .amount_outstanding
+            .to_plain_string(),
+        "0.00"
+    );
+    assert_eq!(
+        installments[0].charges()[2]
+            .amount_outstanding
+            .to_plain_string(),
+        "3.00"
+    );
 }

@@ -36,7 +36,7 @@ fn distribution_matches_java_capture() {
     let c = LoanChargeView::new(m("7"), Some(feb20), false);
     let mut charges = [a, b, c];
 
-    let records = update_charges_paid_amount_by(&mut charges, &m("12"), Some(1));
+    let records = update_charges_paid_amount_by(&mut charges, &m("12"), Some(1), None);
 
     // Golden: PAY B 5; PAY A 3; PAY C 4 — chargesPaidBy A=3.00, B=5.00, C=4.00.
     let seq: Vec<(usize, String)> = records
@@ -59,7 +59,7 @@ fn distribution_matches_java_capture() {
     assert_eq!(charges[2].amount_paid.to_plain_string(), "4.00");
 
     // Refund 6 reverses latest-paid-first: C (4), then A (2 of its 4 paid).
-    let undo = undo_charges_paid_amount_by(&mut charges, &m("6"));
+    let undo = undo_charges_paid_amount_by(&mut charges, &m("6"), None);
     let seq: Vec<(usize, String)> = undo
         .iter()
         .map(|r| (r.charge, r.amount.to_plain_string()))
@@ -72,7 +72,7 @@ fn distribution_matches_java_capture() {
     assert_eq!(charges[0].amount_outstanding.to_plain_string(), "2.00");
 
     // Refund beyond what was paid terminates (Java would spin — documented divergence) after draining everything.
-    let drained = undo_charges_paid_amount_by(&mut charges, &m("100"));
+    let drained = undo_charges_paid_amount_by(&mut charges, &m("100"), None);
     let total_undone = drained.iter().fold(m("0"), |acc, r| acc.plus(&r.amount));
     assert_eq!(
         total_undone.to_plain_string(),

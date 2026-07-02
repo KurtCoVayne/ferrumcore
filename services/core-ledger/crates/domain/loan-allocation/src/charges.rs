@@ -120,10 +120,20 @@ pub struct ChargePaidBy {
 
 /// `findEarliestUnpaidChargeFromUnOrderedSet` (src 736), regular charges: the outstanding charge with the earliest
 /// due date, skipping due-at-disbursement and the caller's skip set (Java removes unpayable charges from the set).
-fn find_earliest_unpaid_charge(charges: &[LoanChargeView], skip: &[bool]) -> Option<usize> {
+/// `only_penalty` restricts candidates to fee-vs-penalty charges (Java filters the set *before* calling — the walk's
+/// FEE/PENALTY leaf passes only the matching charges); `None` considers all (a whole-installment charge payment).
+fn find_earliest_unpaid_charge(
+    charges: &[LoanChargeView],
+    skip: &[bool],
+    only_penalty: Option<bool>,
+) -> Option<usize> {
     let mut earliest: Option<usize> = None;
     for (i, c) in charges.iter().enumerate() {
-        if !skip[i] && c.amount_outstanding.is_greater_than_zero() && !c.due_at_disbursement {
+        if !skip[i]
+            && only_penalty.is_none_or(|p| c.is_penalty == p)
+            && c.amount_outstanding.is_greater_than_zero()
+            && !c.due_at_disbursement
+        {
             let is_earlier = match earliest {
                 None => true,
                 Some(e) => match (c.due_date, charges[e].due_date) {
@@ -140,11 +150,17 @@ fn find_earliest_unpaid_charge(charges: &[LoanChargeView], skip: &[bool]) -> Opt
 }
 
 /// `findLatestPaidChargeFromUnOrderedSet` (src 868), regular charges: the paid-or-partially-paid charge with the
-/// latest due date, skipping due-at-disbursement.
-fn find_latest_paid_charge(charges: &[LoanChargeView]) -> Option<usize> {
+/// latest due date, skipping due-at-disbursement. `only_penalty` mirrors [`find_earliest_unpaid_charge`].
+fn find_latest_paid_charge(
+    charges: &[LoanChargeView],
+    only_penalty: Option<bool>,
+) -> Option<usize> {
     let mut latest: Option<usize> = None;
     for (i, c) in charges.iter().enumerate() {
-        if c.is_paid_or_partially_paid() && !c.due_at_disbursement {
+        if only_penalty.is_none_or(|p| c.is_penalty == p)
+            && c.is_paid_or_partially_paid()
+            && !c.due_at_disbursement
+        {
             let is_later = match latest {
                 None => true,
                 Some(l) => match (c.due_date, charges[l].due_date) {
@@ -168,12 +184,13 @@ pub fn update_charges_paid_amount_by(
     charges: &mut [LoanChargeView],
     amount: &Money,
     installment_number: Option<u32>,
+    only_penalty: Option<bool>,
 ) -> Vec<ChargePaidBy> {
     let mut remaining = amount.clone();
     let mut records = Vec::new();
     let mut skip = vec![false; charges.len()];
     while remaining.is_greater_than_zero() {
-        let Some(idx) = find_earliest_unpaid_charge(charges, &skip) else {
+        let Some(idx) = find_earliest_unpaid_charge(charges, &skip, only_penalty) else {
             break; // Java: "All are tranche charges"
         };
         let paid = charges[idx].update_paid_amount_by(&remaining);
@@ -197,11 +214,12 @@ pub fn update_charges_paid_amount_by(
 pub fn undo_charges_paid_amount_by(
     charges: &mut [LoanChargeView],
     amount: &Money,
+    only_penalty: Option<bool>,
 ) -> Vec<ChargePaidBy> {
     let mut remaining = amount.clone();
     let mut records = Vec::new();
     while remaining.is_greater_than_zero() {
-        let Some(idx) = find_latest_paid_charge(charges) else {
+        let Some(idx) = find_latest_paid_charge(charges, only_penalty) else {
             break; // Java spins forever here — see the module divergence note.
         };
         let deducted = charges[idx].undo_paid_amount_by(&remaining);

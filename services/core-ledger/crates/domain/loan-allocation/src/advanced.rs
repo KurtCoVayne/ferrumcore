@@ -35,6 +35,7 @@
 //! in the separate progressive interest-schedule engine. The credited-* / `addToPrincipal` effects are modeled on a
 //! local [`AdvancedInstallment`] view (the shared `installment.rs` is intentionally not extended).
 
+use crate::charges::{ChargePaidBy, LoanChargeView, update_charges_paid_amount_by};
 use crate::installment::Installment;
 use bigdecimal::BigDecimal;
 use bigdecimal::RoundingMode;
@@ -133,6 +134,14 @@ pub struct AdvancedInstallment {
     /// Running principal credited via `addToPrincipal(date, amount)` (the `addToCreditedPrincipal` path also routes
     /// here). Tracked as a total because the test only inspects the (single) captured value.
     added_principal: Money,
+    /// `getInstallmentNumber()` — stamped onto the `LoanChargePaidBy` records the walk's FEE/PENALTY leaf produces.
+    installment_number: Option<u32>,
+    /// `getLoanChargesOfInstallment(ctx.getCharges(), this, …)` — the charges due in this installment's period,
+    /// travelling with the row so the walk can distribute a paid fee/penalty component across them without threading
+    /// a separate collection through every walk signature.
+    charges: Vec<LoanChargeView>,
+    /// The `LoanChargePaidBy` records accumulated as the walk pays (positive) / refunds (negative) this row's charges.
+    charges_paid_by: Vec<ChargePaidBy>,
 }
 
 impl AdvancedInstallment {
@@ -152,6 +161,9 @@ impl AdvancedInstallment {
             is_additional,
             is_down_payment: false,
             is_re_aged: false,
+            installment_number: None,
+            charges: Vec::new(),
+            charges_paid_by: Vec::new(),
             inner,
         }
     }
@@ -161,6 +173,46 @@ impl AdvancedInstallment {
     pub fn with_from_date(mut self, from_date: Date) -> Self {
         self.from_date = from_date;
         self
+    }
+
+    /// Set the installment number (stamped onto this row's `LoanChargePaidBy` records).
+    #[must_use]
+    pub fn with_installment_number(mut self, number: u32) -> Self {
+        self.installment_number = Some(number);
+        self
+    }
+
+    /// Attach the charges due in this installment's period (the walk distributes fee/penalty payments across them).
+    #[must_use]
+    pub fn with_charges(mut self, charges: Vec<LoanChargeView>) -> Self {
+        self.charges = charges;
+        self
+    }
+
+    /// The charges due in this installment's period.
+    #[must_use]
+    pub fn charges(&self) -> &[LoanChargeView] {
+        &self.charges
+    }
+
+    /// The `LoanChargePaidBy` records accumulated on this row (positive = paid, negative = refunded).
+    #[must_use]
+    pub fn charges_paid_by(&self) -> &[ChargePaidBy] {
+        &self.charges_paid_by
+    }
+
+    /// Distribute a paid fee/penalty `portion` across this row's charges (`chargesPaidByFunction.accept`), recording
+    /// the `LoanChargePaidBy` entries. `is_penalty` selects the charge type, matching Java's pre-filtered set.
+    fn distribute_charge_payment(&mut self, is_penalty: bool, portion: &Money) {
+        if portion.is_greater_than_zero() {
+            let records = update_charges_paid_amount_by(
+                &mut self.charges,
+                portion,
+                self.installment_number,
+                Some(is_penalty),
+            );
+            self.charges_paid_by.extend(records);
+        }
     }
 
     /// `setFromDate` — mutate the period start in place (the re-age rebuild re-anchors surviving additional rows).
@@ -643,12 +695,21 @@ pub(crate) fn pay_component(
     allocation_type: AllocationType,
     amount: &Money,
 ) -> Money {
-    let i = inst.installment_mut();
     match allocation_type {
-        AllocationType::Penalty => i.pay_penalty(amount),
-        AllocationType::Fee => i.pay_fee(amount),
-        AllocationType::Interest => i.pay_interest(amount),
-        AllocationType::Principal => i.pay_principal(amount),
+        // FEE / PENALTY: pay the installment's aggregate bucket, then distribute the paid portion across the row's
+        // fee/penalty charge entities (`processPaymentAllocation` → `chargesPaidByFunction`, src 2026-2046).
+        AllocationType::Penalty => {
+            let portion = inst.installment_mut().pay_penalty(amount);
+            inst.distribute_charge_payment(true, &portion);
+            portion
+        }
+        AllocationType::Fee => {
+            let portion = inst.installment_mut().pay_fee(amount);
+            inst.distribute_charge_payment(false, &portion);
+            portion
+        }
+        AllocationType::Interest => inst.installment_mut().pay_interest(amount),
+        AllocationType::Principal => inst.installment_mut().pay_principal(amount),
     }
 }
 
