@@ -15,5 +15,10 @@ time = { workspace = true }
 fc-money = { workspace = true }
 
 [dev-dependencies]
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 fc-money = { workspace = true }
 time = { workspace = true }
+
+[[bench]]
+name = "recalc"
+harness = false
