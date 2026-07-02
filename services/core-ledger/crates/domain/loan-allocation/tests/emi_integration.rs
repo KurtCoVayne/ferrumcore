@@ -12,7 +12,7 @@ use fc_loan_allocation::advanced::{DueType, PaymentAllocation};
 use fc_loan_allocation::emi_adapter::{
     ChargeOffBehaviour, RestFrequencyType, calculate_is_prepay_attempt,
     calculate_new_pay_date_in_case_of_in_advance_payment, charge_off_is_in_effect,
-    handle_payment_allocation_progressive, handle_re_age_progressive,
+    handle_contract_termination, handle_payment_allocation_progressive, handle_re_age_progressive,
     interest_refund_amount_with_charge_off, interest_refund_amount_without_charge_off,
     interest_till_charge_off, should_recalculate_till_installment_due_date,
     update_installments_by_repayment_periods, update_repayment_period_balances,
@@ -639,4 +639,68 @@ fn interest_till_charge_off_recalculation_and_refund_formula() {
     let out = interest_refund_amount_without_charge_off(&model, jul1, &m("0"), &m("2.05"));
     assert_eq!(out.amount.to_plain_string(), "0.00");
     assert!(out.reversed);
+}
+
+/// `handleContractTermination` (src 587) → `handleAccelerateMaturityDate` (src 2141), fee-free non-recalculation —
+/// verified against the captured Java golden (`fcCaptureContractTermination`): past 100/10 (due Mar 1), current
+/// 100/12 (Mar 1–Apr 1), future 100/8 (Apr 1–May 1), terminated on Mar 16. The current row's interest prorates to
+/// 5.81, its due date snaps to Mar 16, the future principal folds in (→ 200) and the future row is dropped; the
+/// transaction is stamped with the outstanding sweep P 300.00 / I 15.81 and the loan is contract-terminated. A
+/// fully-paid schedule reverses instead.
+#[test]
+fn contract_termination_matches_capture() {
+    let mar16 = d(2023, Month::March, 16);
+    let may1 = d(2023, Month::May, 1);
+    let mut rows = vec![
+        installment(
+            d(2023, Month::February, 1),
+            d(2023, Month::March, 1),
+            "100",
+            "10",
+        ),
+        installment(
+            d(2023, Month::March, 1),
+            d(2023, Month::April, 1),
+            "100",
+            "12",
+        ),
+        installment(d(2023, Month::April, 1), d(2023, Month::May, 1), "100", "8"),
+    ];
+
+    let out = handle_contract_termination(None, &mut rows, mar16, may1);
+
+    assert_eq!(out.principal.to_plain_string(), "300.00");
+    assert_eq!(
+        out.interest.to_plain_string(),
+        "15.81",
+        "10.00 past + 5.81 prorated"
+    );
+    assert!(!out.reversed);
+    assert!(out.contract_terminated);
+
+    // Schedule truncated: the future row is gone; the current row carries the folded principal + prorated interest
+    // with its due date snapped to the termination date.
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1].installment().due_date, mar16);
+    assert_eq!(
+        rows[1].installment().principal().to_plain_string(),
+        "200.00"
+    );
+    assert_eq!(
+        rows[1].installment().interest_charged().to_plain_string(),
+        "5.81"
+    );
+
+    // Fully-paid schedule → all-zero sweep → reverse + lift.
+    let mut paid = vec![installment(
+        d(2023, Month::February, 1),
+        d(2023, Month::March, 1),
+        "100",
+        "0",
+    )];
+    let _ = paid[0].installment_mut().pay_principal(&m("100"));
+    let out = handle_contract_termination(None, &mut paid, mar16, may1);
+    assert!(out.reversed);
+    assert!(!out.contract_terminated);
+    assert_eq!(out.principal.to_plain_string(), "0.00");
 }

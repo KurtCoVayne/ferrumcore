@@ -290,6 +290,180 @@ pub fn interest_till_charge_off(
     total
 }
 
+/// The REGULAR-behaviour day-count proration shared by `getInterestTillChargeOffForPeriod` (src 3661) and
+/// `handleAccelerateMaturityDate` (src 2164): `outstanding / daysInPeriod × daysTill` at `MathContext(12, HALF_EVEN)`,
+/// re-wrapped at the currency scale.
+fn prorated_interest(inst: &AdvancedInstallment, till: Date) -> Money {
+    let mc = fc_loan_emi::Mc::new(12, RoundingMode::HalfEven);
+    let total = inst.installment().interest_outstanding();
+    let days_in_period = BigDecimal::from((inst.due_date() - inst.from_date()).whole_days());
+    let days_till = BigDecimal::from((till - inst.from_date()).whole_days());
+    inst.money(&mc.mul(&mc.div(total.amount(), &days_in_period), &days_till))
+}
+
+/// `handleAccelerateMaturityDate` (src 2141) for the fee-/penalty-free schedule core: truncate the schedule at the
+/// transaction date. The installment containing the transaction date (`from < txn ≤ due`, skipping down-payment rows)
+/// gets its interest re-charged — the engine's till-date interest plus any re-aged future periods' fixed interest when
+/// recalculating (`model: Some`, src 2149-2162), else the day-count proration (src 2163-2176) — its due date snapped
+/// to the transaction date, and the future installments' charged principal folded onto it (a fully-paid current also
+/// absorbs the future rows' outstanding into its completed amount, src 2195-2208); the future rows are then dropped
+/// (`loanSchedule.updateLoanSchedule` with the rows up to the transaction date, src 2210/2243). The
+/// transaction-reprocessing replay, charge relocation, and loan-summary refresh are service-layer, out of scope at
+/// this seam.
+pub fn accelerate_maturity_core(
+    model: Option<&Model>,
+    installments: &mut Vec<AdvancedInstallment>,
+    txn_date: Date,
+    maturity_date: Date,
+) {
+    if installments.is_empty() || txn_date >= maturity_date {
+        return;
+    }
+    let Some(idx) = installments
+        .iter()
+        .position(|i| !i.is_down_payment && i.from_date() < txn_date && txn_date <= i.due_date())
+    else {
+        return;
+    };
+
+    let current_not_fully_paid = installment_not_fully_paid_view(&installments[idx]);
+    if current_not_fully_paid || installments[idx].is_re_aged {
+        match model {
+            Some(m) => {
+                let interest_outstanding = installments[idx].installment().interest_outstanding();
+                let new_interest = m
+                    .get_period_interest_till_date(
+                        installments[idx].from_date(),
+                        installments[idx].due_date(),
+                        txn_date,
+                        true,
+                    )
+                    .unwrap_or_else(|| installments[idx].installment().zero());
+                // Collect fixed interest from future re-aged periods that the truncation removes (src 2154-2159).
+                let future_fixed = m
+                    .periods
+                    .iter()
+                    .filter(|rp| rp.from >= txn_date && rp.re_aged)
+                    .fold(installments[idx].installment().zero(), |acc, rp| {
+                        acc.plus(&rp.fixed_interest)
+                    });
+                let total = new_interest.plus(&future_fixed);
+                if interest_outstanding.is_greater_than_zero() || total.is_greater_than_zero() {
+                    installments[idx]
+                        .installment_mut()
+                        .update_interest_charged(&total);
+                }
+            }
+            None => {
+                if installments[idx]
+                    .installment()
+                    .interest_outstanding()
+                    .is_greater_than_zero()
+                {
+                    let prorated = prorated_interest(&installments[idx], txn_date);
+                    installments[idx]
+                        .installment_mut()
+                        .update_interest_charged(&prorated);
+                }
+            }
+        }
+    }
+
+    // Snap the current installment's due date to the transaction date.
+    installments[idx].installment_mut().due_date = txn_date;
+
+    // Fold the future installments' charged principal onto the current one.
+    let zero = installments[idx].installment().zero();
+    let (future_principal, future_outstanding) = installments
+        .iter()
+        .filter(|i| i.due_date() > txn_date)
+        .fold((zero.clone(), zero.clone()), |(p, o), i| {
+            (
+                p.plus(&i.installment().principal()),
+                o.plus(&i.installment().principal_outstanding()),
+            )
+        });
+    installments[idx]
+        .installment_mut()
+        .add_to_principal(&future_principal);
+    // A fully-paid (obligations-met) current row absorbs the future outstanding into its completed amount.
+    if !current_not_fully_paid {
+        let completed = installments[idx]
+            .installment()
+            .principal()
+            .minus(&future_outstanding);
+        installments[idx]
+            .installment_mut()
+            .set_principal_completed(&completed);
+    }
+
+    // Truncate the schedule to the rows up to the transaction date (the current row's due is now the txn date).
+    installments.retain(|i| i.due_date() <= txn_date);
+}
+
+/// `isNotFullyPaidOff` over the [`AdvancedInstallment`] view (mirrors `installment_not_fully_paid` in the walk).
+fn installment_not_fully_paid_view(inst: &AdvancedInstallment) -> bool {
+    let i = inst.installment();
+    i.principal_outstanding()
+        .plus(&i.interest_outstanding())
+        .plus(&i.fee_charges_outstanding())
+        .plus(&i.penalty_charges_outstanding())
+        .is_greater_than_zero()
+}
+
+/// The outcome of [`handle_contract_termination`]: the outstanding sweep the transaction is stamped with, the
+/// zero-amount reversal, and the resulting ctx `contractTerminated` flag.
+#[derive(Clone, Debug)]
+pub struct ContractTermination {
+    pub principal: Money,
+    pub interest: Money,
+    pub fee: Money,
+    pub penalty: Money,
+    pub reversed: bool,
+    pub contract_terminated: bool,
+}
+
+/// `handleContractTermination` (src 587) for the fee-free non-interest-recalculation core: when anything is still
+/// outstanding, accelerate the maturity to the transaction date ([`accelerate_maturity_core`]) and stamp the
+/// transaction with every remaining installment's outstanding components; mark the context contract-terminated. An
+/// all-zero sweep reverses the transaction, lifts the termination sub-status, and clears the flag (src 625-633).
+/// (The missing-accrual creation and installment-fee recalculation are service-layer no-ops at this seam.)
+#[must_use]
+pub fn handle_contract_termination(
+    model: Option<&Model>,
+    installments: &mut Vec<AdvancedInstallment>,
+    txn_date: Date,
+    maturity_date: Date,
+) -> ContractTermination {
+    let zero = installments.first().map_or_else(
+        || Money::zero(2, RoundingMode::HalfEven),
+        |i| i.installment().zero(),
+    );
+    let mut principal = zero.clone();
+    let mut interest = zero.clone();
+    let mut fee = zero.clone();
+    let mut penalty = zero;
+    if installments.iter().any(installment_not_fully_paid_view) {
+        accelerate_maturity_core(model, installments, txn_date, maturity_date);
+        for inst in installments.iter() {
+            let i = inst.installment();
+            principal = principal.plus(&i.principal_outstanding());
+            interest = interest.plus(&i.interest_outstanding());
+            fee = fee.plus(&i.fee_charges_outstanding());
+            penalty = penalty.plus(&i.penalty_charges_outstanding());
+        }
+    }
+    let all_zero = principal.is_zero() && interest.is_zero() && fee.is_zero() && penalty.is_zero();
+    ContractTermination {
+        principal,
+        interest,
+        fee,
+        penalty,
+        reversed: all_zero,
+        contract_terminated: !all_zero,
+    }
+}
+
 /// `handleInterestRefund`'s charge-off-in-effect branch (src 641-655): the refund amount is recomputed as the
 /// interest till the charge-off date for a progressive schedule with a non-REGULAR charge-off behaviour, else the
 /// total interest charged across the installments. (The recomputed amount is then routed through `handleRepayment` —
