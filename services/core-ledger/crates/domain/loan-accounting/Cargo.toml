@@ -1,0 +1,19 @@
+[package]
+name = "fc-loan-accounting"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Loan transaction -> journal entry mapping (S4) — faithful port of AccrualBasedAccountingProcessorForLoan's accrual posting rules."
+
+[lints]
+workspace = true
+
+[dependencies]
+bigdecimal = { workspace = true }
+time = { workspace = true }
+fc-money = { workspace = true }
+
+[dev-dependencies]
+fc-money = { workspace = true }
+time = { workspace = true }
