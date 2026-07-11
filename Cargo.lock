@@ -383,6 +383,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fc-loan-journal"
+version = "0.0.0"
+dependencies = [
+ "bigdecimal",
+ "fc-loan-emi",
+ "fc-money",
+ "serde",
+ "serde_json",
+ "time",
+]
+
+[[package]]
 name = "fc-loan-lifecycle"
 version = "0.0.0"
 

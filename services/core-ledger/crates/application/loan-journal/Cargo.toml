@@ -1,0 +1,20 @@
+[package]
+name = "fc-loan-journal"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Append-only per-loan operation log + deterministic replay (ADR-0026 event-log recompute). The persistence projection over the serde-free EMI kernel."
+
+[lints]
+workspace = true
+
+[dependencies]
+bigdecimal = { workspace = true }
+time = { workspace = true }
+serde = { workspace = true }
+fc-money = { workspace = true }
+fc-loan-emi = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

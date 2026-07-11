@@ -14,6 +14,7 @@ members = [
     "services/core-ledger/crates/domain/loan-allocation",
     "services/core-ledger/crates/domain/loan-emi",
     "services/core-ledger/crates/domain/loan-accounting",
+    "services/core-ledger/crates/application/loan-journal",
 ]
 
 [workspace.package]
@@ -26,6 +27,10 @@ repository = "FerrumCore"
 [workspace.dependencies]
 bigdecimal = "0.4"
 time = { version = "0.3", default-features = false, features = ["std"] }
+# serde is used ONLY by the application-layer event-log crate (fc-loan-journal, ADR-0026); the hot domain crates
+# stay serde-free and value-semantic (Part-4 invariant).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 prost = "0.14"
 prost-build = "0.14"
 protox = "0.9"
@@ -36,6 +41,7 @@ fc-domain-charge-tax-rates = { path = "shared/fc-domain-charge-tax-rates" }
 fc-proto = { path = "shared/fc-proto" }
 fc-contracts = { path = "shared/fc-contracts" }
 fc-loan-emi = { path = "services/core-ledger/crates/domain/loan-emi" }
+fc-loan-journal = { path = "services/core-ledger/crates/application/loan-journal" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
