@@ -100,8 +100,9 @@ pub enum ScheduleInit {
 }
 
 impl ScheduleInit {
-    fn build(&self) -> Result<Model, JournalError> {
-        let (periods, principal, rate_pct, scale) = match self {
+    /// The fields common to every init variant: `(periods, principal, rate_pct, scale)`.
+    fn parts(&self) -> (&[(String, String)], &str, &str, i64) {
+        match self {
             ScheduleInit::Declining {
                 periods,
                 principal,
@@ -116,7 +117,11 @@ impl ScheduleInit {
                 scale,
                 ..
             } => (periods, principal, rate_pct, *scale),
-        };
+        }
+    }
+
+    fn build(&self) -> Result<Model, JournalError> {
+        let (periods, principal, rate_pct, scale) = self.parts();
         let period_dates: Vec<(Date, Date)> = periods
             .iter()
             .map(|(from, due)| Ok((parse_date(from)?, parse_date(due)?)))
@@ -203,7 +208,128 @@ pub struct LoanJournal {
     pub ops: Vec<LoanOp>,
 }
 
+/// A validation rejection surfaced at the persistence/service boundary. The kernel deliberately reproduces Fineract's
+/// *silent clamps* (negative-to-zero, `.max(1)` divisor guards, zero-installment no-ops) so the math stays byte-exact;
+/// this boundary makes those incoherent-input cases **explicit and auditable** before they reach the kernel, without
+/// altering the math. An empty issue list means the journal is coherent to replay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidationIssue {
+    /// The schedule has no repayment periods (the kernel would produce an empty model).
+    NoPeriods,
+    /// A period's `due` is not strictly after its `from` (index into `init.periods`).
+    NonPositivePeriod(usize),
+    /// Periods are not ordered by `from` date (index of the out-of-order period).
+    PeriodsOutOfOrder(usize),
+    /// The disbursed principal is not strictly positive.
+    NonPositivePrincipal,
+    /// The nominal rate is negative.
+    NegativeRate,
+    /// The currency scale is outside the sane `0..=6` range.
+    ScaleOutOfRange(i64),
+    /// A monetary amount is negative (payments / credits / disbursements are non-negative) — op index.
+    NegativeAmount(usize),
+    /// A `ReAge` names zero installments (the kernel's `.max(1)` divisor guard would silently clamp) — op index.
+    ZeroReAgeInstallments(usize),
+    /// An `AddRepaymentPeriods` names a zero count (no-op that likely signals a bad request) — op index.
+    ZeroRepaymentPeriodCount(usize),
+    /// A field could not be parsed (date or amount) — a human-readable location.
+    Unparseable(String),
+}
+
 impl LoanJournal {
+    /// Validate the journal for coherence **before** [`replay`](LoanJournal::replay). Returns every issue found
+    /// (empty = coherent). This is the boundary the audit-focused ledger needs: it turns the kernel's faithful silent
+    /// clamps into explicit, recordable rejections at the edge, leaving the golden-verified math untouched.
+    #[must_use]
+    pub fn validate(&self) -> Vec<ValidationIssue> {
+        let mut issues = Vec::new();
+        let zero = BigDecimal::from(0);
+        let (periods, principal, rate_pct, scale) = self.init.parts();
+
+        if periods.is_empty() {
+            issues.push(ValidationIssue::NoPeriods);
+        }
+        let mut prev_from: Option<Date> = None;
+        for (i, (from, due)) in periods.iter().enumerate() {
+            match (parse_date(from), parse_date(due)) {
+                (Ok(f), Ok(t)) => {
+                    if t <= f {
+                        issues.push(ValidationIssue::NonPositivePeriod(i));
+                    }
+                    if prev_from.is_some_and(|p| f < p) {
+                        issues.push(ValidationIssue::PeriodsOutOfOrder(i));
+                    }
+                    prev_from = Some(f);
+                }
+                (a, b) => {
+                    if a.is_err() {
+                        issues.push(ValidationIssue::Unparseable(format!(
+                            "period {i} from {from:?}"
+                        )));
+                    }
+                    if b.is_err() {
+                        issues.push(ValidationIssue::Unparseable(format!(
+                            "period {i} due {due:?}"
+                        )));
+                    }
+                }
+            }
+        }
+        match parse_decimal(principal) {
+            Ok(p) if p <= zero => issues.push(ValidationIssue::NonPositivePrincipal),
+            Ok(_) => {}
+            Err(_) => issues.push(ValidationIssue::Unparseable(format!(
+                "principal {principal:?}"
+            ))),
+        }
+        match parse_decimal(rate_pct) {
+            Ok(r) if r < zero => issues.push(ValidationIssue::NegativeRate),
+            Ok(_) => {}
+            Err(_) => issues.push(ValidationIssue::Unparseable(format!(
+                "rate_pct {rate_pct:?}"
+            ))),
+        }
+        if !(0..=6).contains(&scale) {
+            issues.push(ValidationIssue::ScaleOutOfRange(scale));
+        }
+
+        for (i, op) in self.ops.iter().enumerate() {
+            self.validate_op(i, op, &mut issues);
+        }
+        issues
+    }
+
+    fn validate_op(&self, i: usize, op: &LoanOp, issues: &mut Vec<ValidationIssue>) {
+        let zero = BigDecimal::from(0);
+        let mut check_amount = |s: &str| match parse_decimal(s) {
+            Ok(a) if a < zero => issues.push(ValidationIssue::NegativeAmount(i)),
+            Ok(_) => {}
+            Err(_) => issues.push(ValidationIssue::Unparseable(format!("op {i} amount {s:?}"))),
+        };
+        match op {
+            LoanOp::Disburse { amount, .. }
+            | LoanOp::CapitalizedIncome { amount, .. }
+            | LoanOp::PayPrincipal { amount, .. }
+            | LoanOp::PayInterest { amount, .. }
+            | LoanOp::CreditPrincipal { amount, .. }
+            | LoanOp::CreditInterest { amount, .. }
+            | LoanOp::BalanceCorrection { amount, .. } => check_amount(amount),
+            LoanOp::ChangeInterestRate { .. }
+            | LoanOp::ChangeDueDate { .. }
+            | LoanOp::InterestPause { .. } => {}
+            LoanOp::AddRepaymentPeriods { count, .. } => {
+                if *count == 0 {
+                    issues.push(ValidationIssue::ZeroRepaymentPeriodCount(i));
+                }
+            }
+            LoanOp::ReAge { installments, .. } => {
+                if *installments == 0 {
+                    issues.push(ValidationIssue::ZeroReAgeInstallments(i));
+                }
+            }
+        }
+    }
+
     /// Reconstruct the interest-schedule [`Model`] by generating the fresh schedule and replaying every operation
     /// through the kernel, in order. Deterministic: the kernel is a pure function of the log (no wall-clock, no
     /// interior mutability), so `replay` of a journal always yields the same Model as the live sequence that produced
